@@ -64,6 +64,7 @@ export async function completeWithOpenRouter(params: {
   maxTokens?: number;
   responseFormat?: "json_object";
   cacheControl?: boolean;
+  signal?: AbortSignal;
 }): Promise<CompletionResult> {
   const started = Date.now();
   let response;
@@ -82,8 +83,13 @@ export async function completeWithOpenRouter(params: {
       temperature: params.temperature ?? 0.4,
       max_tokens: params.maxTokens ?? 1600,
       response_format: params.responseFormat ? { type: params.responseFormat } : undefined
-    });
+    }, { signal: params.signal });
   } catch (error) {
+    if (params.signal?.aborted || isAbortLikeError(error)) {
+      const abortError = new Error("OpenRouter request was aborted.");
+      abortError.name = "AbortError";
+      throw abortError;
+    }
     throw new Error(`OpenRouter request failed for ${params.model}: ${getErrorMessage(error)}`);
   }
 
@@ -105,6 +111,11 @@ export async function completeWithOpenRouter(params: {
     usage: normalizeUsage(response.usage, promptText, content),
     latencyMs: Date.now() - started
   };
+}
+
+function isAbortLikeError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return error.name === "AbortError" || error.name === "APIUserAbortError";
 }
 
 function normalizeMessageContent(content: unknown): string {

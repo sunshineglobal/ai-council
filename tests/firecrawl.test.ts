@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildResearchContext, searchWithFirecrawl } from "@/lib/firecrawl";
+import { buildResearchContext, MIN_DETAILED_RESEARCH_SOURCES, searchWithFirecrawl } from "@/lib/firecrawl";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -27,7 +27,7 @@ describe("Firecrawl research context", () => {
     expect(context).toContain("https://example.com/a");
   });
 
-  it("uses the standalone Firecrawl search API", async () => {
+  it("uses the standalone Firecrawl search API and raises low limits to the research floor", async () => {
     process.env.FIRECRAWL_API_KEY = "test-key";
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
@@ -70,7 +70,7 @@ describe("Firecrawl research context", () => {
     });
     expect(JSON.parse(init.body as string)).toEqual({
       query: "latest world news",
-      limit: 5,
+      limit: MIN_DETAILED_RESEARCH_SOURCES,
       sources: ["web"],
       scrapeOptions: {
         formats: [{ type: "markdown" }],

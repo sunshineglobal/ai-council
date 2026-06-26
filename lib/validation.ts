@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_FIRECRAWL_SEARCH_LIMIT, MIN_DETAILED_RESEARCH_SOURCES } from "@/lib/firecrawl";
 
 const MAX_ATTACHMENT_COUNT = 5;
 
@@ -15,7 +16,7 @@ export const councilRunSchema = z.object({
 
 export const researchSchema = z.object({
   query: z.string().min(1).max(4000),
-  limit: z.number().int().min(1).max(10).optional()
+  limit: z.number().int().min(MIN_DETAILED_RESEARCH_SOURCES).max(MAX_FIRECRAWL_SEARCH_LIMIT).optional()
 });
 
 export const inviteSchema = z.object({

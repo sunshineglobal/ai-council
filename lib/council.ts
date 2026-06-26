@@ -2,7 +2,7 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 import { buildAttachmentContext, cleanupEphemeralAttachments, loadUserAttachments, persistRunAttachments } from "@/lib/attachments";
 import { getErrorLog, getErrorMessage } from "@/lib/errors";
 import { compactText } from "@/lib/format";
-import { buildResearchContext, searchWithFirecrawl } from "@/lib/firecrawl";
+import { buildResearchContext, DEFAULT_FIRECRAWL_LIMIT, searchWithFirecrawl } from "@/lib/firecrawl";
 import { completeWithOpenRouter, fetchOpenRouterModels, type CompletionResult } from "@/lib/openrouter";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { emptyUsage, summarizeUsage } from "@/lib/token-usage";
@@ -23,7 +23,6 @@ import type {
 import { TtlCache } from "@/lib/cache";
 
 const MAX_MODELS = 8;
-const DEFAULT_FIRECRAWL_LIMIT = 5;
 const PEER_ANSWER_CONTEXT_CHARS = 3200;
 const CRITIQUE_ROUND_CONTEXT_CHARS = 2400;
 
@@ -56,10 +55,12 @@ type RunContext = {
   userId: string;
   userEmail: string;
   onEvent?: (event: CouncilEvent) => void | Promise<void>;
+  signal?: AbortSignal;
 };
 
 export async function runCouncil(input: CouncilRunInput, context: RunContext): Promise<CouncilRunResult> {
   validateInput(input);
+  throwIfAborted(context);
 
   const admin = createSupabaseAdminClient();
   const runId = crypto.randomUUID();
@@ -103,22 +104,24 @@ export async function runCouncil(input: CouncilRunInput, context: RunContext): P
     });
   }
 
-  await emit(context, { type: "started", runId });
-  if (attachments.length) {
-    await emit(context, {
-      type: "stage",
-      stage: "initial_answer",
-      message: `Loaded ${attachments.length} attached ${attachments.length === 1 ? "file" : "files"}.`
-    });
-  }
-
   try {
+    await emit(context, { type: "started", runId });
+    if (attachments.length) {
+      await emit(context, {
+        type: "stage",
+        stage: "initial_answer",
+        message: `Loaded ${attachments.length} attached ${attachments.length === 1 ? "file" : "files"}.`
+      });
+    }
+
     const research = input.researchEnabled
       ? await runResearchStage(input.prompt, input.saveHistory, runId, context, usageEvents)
       : undefined;
+    throwIfAborted(context);
 
     const researchContext = buildResearchContext(research);
     const initialResponses = await runInitialStage(input, researchContext, attachmentContext, context, runId, usageEvents, pricingByModel);
+    throwIfAborted(context);
 
     if (!initialResponses.some((result) => result.status === "complete" && result.content.trim())) {
       const reasons = initialResponses.map((result) => `${result.modelId}: ${result.error ?? "empty response"}`).join("; ");
@@ -142,6 +145,7 @@ export async function runCouncil(input: CouncilRunInput, context: RunContext): P
         pricingByModel
       });
       critiqueRounds.push(round);
+      throwIfAborted(context);
     }
 
     const revisions = await runRevisionStage({
@@ -155,6 +159,7 @@ export async function runCouncil(input: CouncilRunInput, context: RunContext): P
       usageEvents,
       pricingByModel
     });
+    throwIfAborted(context);
 
     const judge = await runJudgeStage({
       input,
@@ -168,6 +173,7 @@ export async function runCouncil(input: CouncilRunInput, context: RunContext): P
       usageEvents,
       pricingByModel
     });
+    throwIfAborted(context);
 
     const latencyMs = Date.now() - started;
     const tokenTotals = summarizeUsage(usageEvents);
@@ -216,12 +222,20 @@ export async function runCouncil(input: CouncilRunInput, context: RunContext): P
     await emit(context, { type: "complete", result });
     return result;
   } catch (error) {
-    const message = getErrorMessage(error, "Council run failed.");
-    console.error("[council] run failed", {
-      runId,
-      userId: context.userId,
-      ...getErrorLog(error)
-    });
+    const aborted = isAbortError(error, context.signal);
+    const message = aborted ? "Council run stopped." : getErrorMessage(error, "Council run failed.");
+    if (aborted) {
+      console.info("[council] run stopped", {
+        runId,
+        userId: context.userId
+      });
+    } else {
+      console.error("[council] run failed", {
+        runId,
+        userId: context.userId,
+        ...getErrorLog(error)
+      });
+    }
     const { error: updateError } = await admin
       .from("council_runs")
       .update({
@@ -260,6 +274,19 @@ function validateInput(input: CouncilRunInput) {
   if (input.debateDepth < 1 || input.debateDepth > 4) throw new Error("Debate depth must be between 1 and 4.");
 }
 
+function throwIfAborted(context: RunContext) {
+  if (!context.signal?.aborted) return;
+  const error = new Error("Council run stopped.");
+  error.name = "AbortError";
+  throw error;
+}
+
+function isAbortError(error: unknown, signal?: AbortSignal) {
+  if (signal?.aborted) return true;
+  if (!(error instanceof Error)) return false;
+  return error.name === "AbortError" || error.name === "APIUserAbortError";
+}
+
 async function insertRun(
   admin: ReturnType<typeof createSupabaseAdminClient>,
   params: {
@@ -292,11 +319,15 @@ async function runResearchStage(
   context: RunContext,
   usageEvents: UsageEvent[]
 ): Promise<ResearchResult | undefined> {
-  await emit(context, { type: "stage", stage: "research_context", message: "Searching the web with Firecrawl." });
+  await emit(context, {
+    type: "stage",
+    stage: "research_context",
+    message: `Searching the web with Firecrawl for at least ${DEFAULT_FIRECRAWL_LIMIT} detailed sources.`
+  });
 
-  const cacheKey = prompt.trim().toLowerCase().slice(0, 500);
+  const cacheKey = `${DEFAULT_FIRECRAWL_LIMIT}::${prompt.trim().toLowerCase().slice(0, 500)}`;
   const cached = researchCache.get(cacheKey);
-  if (cached) {
+  if (cached && hasMinimumDetailedSources(cached)) {
     await emit(context, { type: "stage", stage: "research_context", message: "Using cached research results." });
     const usage = buildUsageEvent({
       stage: "research_context",
@@ -317,13 +348,21 @@ async function runResearchStage(
     await emit(context, { type: "usage", usage });
     return cached;
   }
+  if (cached) {
+    await emit(context, {
+      type: "stage",
+      stage: "research_context",
+      message: "Cached research had too few detailed sources; refreshing."
+    });
+  }
 
   let research: ResearchResult;
   try {
-    research = await searchWithFirecrawl(prompt, DEFAULT_FIRECRAWL_LIMIT);
+    research = await searchWithFirecrawl(prompt, DEFAULT_FIRECRAWL_LIMIT, context.signal);
   } catch (error) {
+    if (isAbortError(error, context.signal)) throw error;
     const message = getErrorMessage(error, "Firecrawl research failed.");
-    console.warn("[council] Firecrawl research failed; continuing without web context", {
+    console.warn("[council] Firecrawl research failed before model answers", {
       runId,
       userId: context.userId,
       ...getErrorLog(error)
@@ -340,10 +379,38 @@ async function runResearchStage(
     await emit(context, {
       type: "stage",
       stage: "research_context",
-      message: `Firecrawl research failed; continuing without web context. ${compactText(message, 180)}`
+      message: `Firecrawl research failed before council answers. ${compactText(message, 180)}`
     });
     await emit(context, { type: "usage", usage });
-    return undefined;
+    throw new Error(`Firecrawl research failed before council answers. ${message}`);
+  }
+
+  if (!hasMinimumDetailedSources(research)) {
+    const message = `Firecrawl returned ${research.sources.length} detailed sources; at least ${DEFAULT_FIRECRAWL_LIMIT} are required before council answers.`;
+    console.warn("[council] Firecrawl returned too few detailed sources", {
+      runId,
+      userId: context.userId,
+      sourceCount: research.sources.length,
+      requiredSourceCount: DEFAULT_FIRECRAWL_LIMIT
+    });
+    const usage = buildUsageEvent({
+      stage: "research_context",
+      modelId: "firecrawl",
+      usage: {
+        promptTokens: research.estimatedContextTokens,
+        completionTokens: 0,
+        totalTokens: research.estimatedContextTokens,
+        estimated: true
+      },
+      latencyMs: 0,
+      status: "error"
+    });
+    usageEvents.push(usage);
+    await persistRunUsage(runId, context.userId, usage);
+    await emit(context, { type: "stage", stage: "research_context", message });
+    await emit(context, { type: "research", research });
+    await emit(context, { type: "usage", usage });
+    throw new Error(message);
   }
   researchCache.set(cacheKey, research);
 
@@ -366,6 +433,10 @@ async function runResearchStage(
   await emit(context, { type: "research", research });
   await emit(context, { type: "usage", usage });
   return research;
+}
+
+function hasMinimumDetailedSources(research: ResearchResult): boolean {
+  return research.sources.length >= DEFAULT_FIRECRAWL_LIMIT;
 }
 
 async function runInitialStage(
@@ -642,9 +713,11 @@ async function runJudgeStage(params: {
         temperature: 0.2,
         maxTokens: 2200,
         responseFormat: "json_object",
-        cacheControl: true
+        cacheControl: true,
+        signal: params.context.signal
       });
     } catch (error) {
+      if (isAbortError(error, params.context.signal)) throw error;
       console.warn("[council] judge JSON mode failed, retrying without response_format", {
         runId: params.runId,
         modelId: params.input.judgeModel,
@@ -655,11 +728,13 @@ async function runJudgeStage(params: {
         messages,
         temperature: 0.2,
         maxTokens: 2200,
-        cacheControl: true
+        cacheControl: true,
+        signal: params.context.signal
       });
     }
 
   } catch (error) {
+    if (isAbortError(error, params.context.signal)) throw error;
     const message = getErrorMessage(error, "Judge failed.");
     const failedResult: JudgeResult = {
       id,
@@ -724,9 +799,11 @@ async function callModelStage(params: {
       messages: params.messages,
       temperature: params.stage === "initial_answer" ? 0.55 : 0.35,
       maxTokens: 1800,
-      cacheControl: true
+      cacheControl: true,
+      signal: params.context.signal
     });
   } catch (error) {
+    if (isAbortError(error, params.context.signal)) throw error;
     const message = getErrorMessage(error, "Model call failed.");
     const result: StageResult = {
       id,
@@ -786,9 +863,11 @@ async function callCritiqueStage(params: {
       messages: params.messages,
       temperature: 0.45,
       maxTokens: 1400,
-      cacheControl: true
+      cacheControl: true,
+      signal: params.context.signal
     });
   } catch (error) {
+    if (isAbortError(error, params.context.signal)) throw error;
     const message = getErrorMessage(error, "Critique call failed.");
     const result: CritiqueResult = {
       id,
@@ -1203,6 +1282,9 @@ async function loadPricingByModel(): Promise<ModelPricingMap> {
 }
 
 async function emit(context: RunContext, event: CouncilEvent) {
+  if (event.type !== "error") {
+    throwIfAborted(context);
+  }
   await context.onEvent?.(event);
 }
 

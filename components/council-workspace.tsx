@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, FileText, History, Loader2, PanelLeft, Paperclip, Plus, Search, Send, Settings2, SlidersHorizontal, Sparkles, User, X } from "lucide-react";
+import { Bot, FileText, History, Loader2, PanelLeft, Paperclip, Plus, Search, Send, Settings2, SlidersHorizontal, Sparkles, Square, Trash2, User, X } from "lucide-react";
 import { MarkdownBlock } from "@/components/markdown-block";
 import { RunTrace } from "@/components/run-trace";
 import { TokenBreakdown } from "@/components/token-breakdown";
@@ -137,6 +138,7 @@ export function CouncilWorkspace({
   defaultSaveHistory: boolean;
   initialThreadId?: string;
 }) {
+  const router = useRouter();
   const [models, setModels] = useState<ModelOption[]>([]);
   const [selectedModels, setSelectedModels] = useState<string[]>(DEFAULT_COUNCIL);
   const [judgeModel, setJudgeModel] = useState(DEFAULT_JUDGE);
@@ -147,6 +149,7 @@ export function CouncilWorkspace({
   const [saveHistory, setSaveHistory] = useState(defaultSaveHistory);
   const [debateDepth, setDebateDepth] = useState(2);
   const [running, setRunning] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [error, setError] = useState("");
   const [statusLog, setStatusLog] = useState<string[]>([]);
   const [usageEvents, setUsageEvents] = useState<UsageEvent[]>([]);
@@ -156,12 +159,14 @@ export function CouncilWorkspace({
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [chats, setChats] = useState<ChatSummary[]>([]);
+  const [deletingChatId, setDeletingChatId] = useState<string | null>(null);
   const [thread, setThread] = useState<ThreadPayload | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activityEndRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const deferredModelFilter = useDeferredValue(modelFilter);
 
   // Live run intermediate states
@@ -323,6 +328,43 @@ export function CouncilWorkspace({
     setThread(body);
   }
 
+  async function deleteChat(chatId: string) {
+    const previousChats = chats;
+    const chat = previousChats.find((item) => item.id === chatId);
+    if (!chat || deletingChatId) return;
+
+    const confirmed = window.confirm(`Delete "${chat.title}"? This removes the saved conversation.`);
+    if (!confirmed) return;
+
+    setDeletingChatId(chatId);
+    setError("");
+    setChats((current) => current.filter((item) => item.id !== chatId));
+
+    try {
+      const response = await fetch(`/api/chats/${chatId}`, { method: "DELETE" });
+      if (!response.ok) {
+        throw new Error(await readResponseError(response));
+      }
+
+      if (initialThreadId === chatId) {
+        setThread(null);
+        setResult(null);
+        setActivePrompt("");
+        setStatusLog([]);
+        setUsageEvents([]);
+        setSelectedRunId(null);
+        router.push("/app");
+      } else {
+        router.refresh();
+      }
+    } catch (deleteError) {
+      setChats(previousChats);
+      setError(deleteError instanceof Error ? deleteError.message : "Could not delete chat.");
+    } finally {
+      setDeletingChatId(null);
+    }
+  }
+
   function toggleModel(modelId: string) {
     setSelectedModels((current) => {
       if (current.includes(modelId)) return current.filter((id) => id !== modelId);
@@ -386,10 +428,13 @@ export function CouncilWorkspace({
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmedPrompt = prompt.trim();
-    if (!trimmedPrompt || selectedModels.length === 0 || !judgeModel) return;
+    if (running || uploading || !trimmedPrompt || selectedModels.length === 0 || !judgeModel) return;
     const queuedAttachments = attachments;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     setRunning(true);
+    setStopping(false);
     setError("");
     setResult(null);
     setActivePrompt(trimmedPrompt);
@@ -419,7 +464,8 @@ export function CouncilWorkspace({
           saveHistory,
           threadId: saveHistory ? initialThreadId : undefined,
           attachmentIds: queuedAttachments.map((attachment) => attachment.id)
-        })
+        }),
+        signal: controller.signal
       });
 
       if (!response.ok || !response.body) {
@@ -435,10 +481,26 @@ export function CouncilWorkspace({
         await loadChats();
       }
     } catch (runError) {
-      setError(runError instanceof Error ? runError.message : "Council request failed.");
+      if (isAbortError(runError)) {
+        setError("");
+        setStatusLog((current) => current.at(-1) === "Council run stopped." ? current : [...current, "Council run stopped."]);
+      } else {
+        setError(runError instanceof Error ? runError.message : "Council request failed.");
+      }
     } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
       setRunning(false);
+      setStopping(false);
     }
+  }
+
+  function stopRun() {
+    if (!running || stopping) return;
+    setStopping(true);
+    setStatusLog((current) => current.at(-1) === "Stopping council run." ? current : [...current, "Stopping council run."]);
+    abortControllerRef.current?.abort();
   }
 
   async function readEventStream(body: ReadableStream<Uint8Array>) {
@@ -495,7 +557,7 @@ export function CouncilWorkspace({
     }
     if (event.type === "research") {
       setLiveResearch(event.research);
-      setStatusLog((current) => [...current, `Found ${event.research.sources.length} Firecrawl sources.`]);
+      setStatusLog((current) => [...current, `Found ${event.research.sources.length} detailed Firecrawl sources.`]);
     }
     if (event.type === "usage") {
       setUsageEvents((current) => [...current, event.usage]);
@@ -572,18 +634,34 @@ export function CouncilWorkspace({
         </div>
         <div className="chat-list">
           {chats.length === 0 ? <p className="muted small">Saved chats appear here.</p> : null}
-          {chats.map((chat) => (
-            <Link
-              aria-current={initialThreadId === chat.id ? "page" : undefined}
-              className={`chat-link ${initialThreadId === chat.id ? "active" : ""}`}
-              href={`/app/chats/${chat.id}`}
-              key={chat.id}
-              prefetch={false}
-            >
-              <strong>{chat.title}</strong>
-              <span>{formatDate(chat.updated_at)}</span>
-            </Link>
-          ))}
+          {chats.map((chat) => {
+            const isActive = initialThreadId === chat.id;
+            const isDeleting = deletingChatId === chat.id;
+
+            return (
+              <div className={`chat-row ${isActive ? "active" : ""}`} key={chat.id}>
+                <Link
+                  aria-current={isActive ? "page" : undefined}
+                  className="chat-link"
+                  href={`/app/chats/${chat.id}`}
+                  prefetch={false}
+                >
+                  <strong>{chat.title}</strong>
+                  <span>{formatDate(chat.updated_at)}</span>
+                </Link>
+                <button
+                  aria-label={`Delete ${chat.title}`}
+                  className="icon-button ghost chat-delete-button"
+                  disabled={isDeleting || running}
+                  title={isDeleting ? "Deleting chat" : `Delete ${chat.title}`}
+                  type="button"
+                  onClick={() => void deleteChat(chat.id)}
+                >
+                  {isDeleting ? <Loader2 className="spin" size={14} /> : <Trash2 size={14} />}
+                </button>
+              </div>
+            );
+          })}
         </div>
       </aside>
 
@@ -708,9 +786,15 @@ export function CouncilWorkspace({
               >
                 {uploading ? <Loader2 className="spin" size={17} /> : <Paperclip size={17} />}
               </button>
-              <button className="send-button" disabled={!canSubmit} type="submit" title={running ? "Running" : "Send"}>
-                <Send size={17} />
-              </button>
+              {running ? (
+                <button className="send-button stop-button" disabled={stopping} type="button" title={stopping ? "Stopping" : "Stop"} onClick={stopRun}>
+                  {stopping ? <Loader2 className="spin" size={17} /> : <Square size={16} />}
+                </button>
+              ) : (
+                <button className="send-button" disabled={!canSubmit} type="submit" title="Send">
+                  <Send size={17} />
+                </button>
+              )}
             </div>
           </div>
         </form>
@@ -1172,6 +1256,11 @@ function compactTitle(text: string) {
   const trimmed = text.trim().replace(/\s+/g, " ");
   if (!trimmed) return "";
   return trimmed.length > 52 ? `${trimmed.slice(0, 49)}...` : trimmed;
+}
+
+function isAbortError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return error.name === "AbortError" || error.name === "APIUserAbortError";
 }
 
 function modelLabel(models: ModelOption[], modelId: string) {

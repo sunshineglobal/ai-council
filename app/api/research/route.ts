@@ -8,7 +8,7 @@ export async function POST(request: Request) {
   try {
     await requireApiProfile();
     const body = researchSchema.parse(await request.json());
-    const research = await searchWithFirecrawl(body.query, body.limit ?? 5);
+    const research = await searchWithFirecrawl(body.query, body.limit);
     return NextResponse.json({ research });
   } catch (error) {
     return jsonError(error);

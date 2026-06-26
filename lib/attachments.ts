@@ -235,7 +235,7 @@ export async function persistRunAttachments(params: {
   if (error) throw error;
 }
 
-export async function cleanupEphemeralAttachments(params: {
+export async function deleteUserAttachments(params: {
   admin: SupabaseAdmin;
   userId: string;
   attachmentIds: string[];
@@ -251,7 +251,7 @@ export async function cleanupEphemeralAttachments(params: {
     .in("id", uniqueIds);
 
   if (error) {
-    console.warn("[attachments] could not load ephemeral attachments for cleanup", error);
+    console.warn("[attachments] could not load attachments for cleanup", error);
     return;
   }
 
@@ -259,7 +259,7 @@ export async function cleanupEphemeralAttachments(params: {
   if (paths.length) {
     const { error: storageError } = await params.admin.storage.from(ATTACHMENT_BUCKET).remove(paths);
     if (storageError) {
-      console.warn("[attachments] could not remove ephemeral storage objects", storageError);
+      console.warn("[attachments] could not remove storage objects", storageError);
     }
   }
 
@@ -275,8 +275,16 @@ export async function cleanupEphemeralAttachments(params: {
     .in("id", uniqueIds);
 
   if (updateError) {
-    console.warn("[attachments] could not mark ephemeral attachments deleted", updateError);
+    console.warn("[attachments] could not mark attachments deleted", updateError);
   }
+}
+
+export async function cleanupEphemeralAttachments(params: {
+  admin: SupabaseAdmin;
+  userId: string;
+  attachmentIds: string[];
+}) {
+  await deleteUserAttachments(params);
 }
 
 function normalizeExtractionStatus(status: string | null | undefined): CouncilAttachment["extractionStatus"] {

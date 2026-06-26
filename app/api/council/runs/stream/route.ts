@@ -22,9 +22,13 @@ export async function POST(request: Request) {
       saveHistory: input.saveHistory
     });
 
+    let closed = false;
     const stream = new ReadableStream({
       start(controller) {
-        let closed = false;
+        const closeFromAbort = () => {
+          closed = true;
+        };
+        request.signal.addEventListener("abort", closeFromAbort, { once: true });
 
         const send = (event: unknown, type = "message") => {
           if (closed) return;
@@ -39,9 +43,18 @@ export async function POST(request: Request) {
         runCouncil(input, {
           userId: profile.id,
           userEmail: profile.email,
+          signal: request.signal,
           onEvent: async (event) => send(event, event.type)
         })
           .catch((error) => {
+            if (request.signal.aborted || isAbortLikeError(error)) {
+              console.info("[council.stream] run stopped", {
+                userId: profile.id,
+                modelCount: input.models.length,
+                judgeModel: input.judgeModel
+              });
+              return;
+            }
             const message = getErrorMessage(error, "Council run failed.");
             console.error("[council.stream] run failed", {
               userId: profile.id,
@@ -58,6 +71,7 @@ export async function POST(request: Request) {
             );
           })
           .finally(() => {
+            request.signal.removeEventListener("abort", closeFromAbort);
             if (closed) return;
             closed = true;
             try {
@@ -66,6 +80,9 @@ export async function POST(request: Request) {
               console.warn("[council.stream] could not close stream", getErrorLog(error));
             }
           });
+      },
+      cancel() {
+        closed = true;
       }
     });
 
@@ -80,4 +97,9 @@ export async function POST(request: Request) {
     console.error("[council.stream] request failed before stream start", getErrorLog(error));
     return jsonError(error);
   }
+}
+
+function isAbortLikeError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return error.name === "AbortError" || error.name === "APIUserAbortError";
 }

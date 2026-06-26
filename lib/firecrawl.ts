@@ -4,6 +4,9 @@ import { estimateTokens } from "@/lib/token-usage";
 import { TtlCache } from "@/lib/cache";
 
 const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
+export const MIN_DETAILED_RESEARCH_SOURCES = 15;
+export const MAX_FIRECRAWL_SEARCH_LIMIT = 100;
+export const DEFAULT_FIRECRAWL_LIMIT = MIN_DETAILED_RESEARCH_SOURCES;
 const RESEARCH_CONTEXT_CHARS_PER_SOURCE = 900;
 const RESEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
 const researchCache = new TtlCache<string, ResearchResult>(RESEARCH_CACHE_TTL_MS, 64);
@@ -34,8 +37,9 @@ type FirecrawlSearchResponse = {
   credits_used?: number;
 };
 
-export async function searchWithFirecrawl(query: string, limit = 5): Promise<ResearchResult> {
-  const cacheKey = `${limit}::${query.trim().toLowerCase()}`;
+export async function searchWithFirecrawl(query: string, limit = DEFAULT_FIRECRAWL_LIMIT, signal?: AbortSignal): Promise<ResearchResult> {
+  const normalizedLimit = normalizeFirecrawlLimit(limit);
+  const cacheKey = `${normalizedLimit}::${query.trim().toLowerCase()}`;
   const cacheEnabled = process.env.NODE_ENV !== "test";
   const cached = cacheEnabled ? researchCache.get(cacheKey) : undefined;
   if (cached) return cached;
@@ -48,13 +52,14 @@ export async function searchWithFirecrawl(query: string, limit = 5): Promise<Res
     },
     body: JSON.stringify({
       query,
-      limit,
+      limit: normalizedLimit,
       sources: ["web"],
       scrapeOptions: {
         formats: [{ type: "markdown" }],
         onlyMainContent: true
       }
-    })
+    }),
+    signal
   });
 
   if (!response.ok) {
@@ -65,8 +70,8 @@ export async function searchWithFirecrawl(query: string, limit = 5): Promise<Res
   const body = (await response.json()) as FirecrawlSearchResponse;
   const credits = body.creditsUsed ?? body.credits_used ?? 0;
   const sources = extractSearchItems(body.data)
-    .filter((item) => getSourceUrl(item))
-    .slice(0, limit)
+    .filter(hasDetailedSource)
+    .slice(0, normalizedLimit)
     .map(normalizeSource);
 
   const context = buildResearchContext({ query, sources, credits, estimatedContextTokens: 0 });
@@ -81,6 +86,12 @@ export async function searchWithFirecrawl(query: string, limit = 5): Promise<Res
     researchCache.set(cacheKey, result);
   }
   return result;
+}
+
+function normalizeFirecrawlLimit(limit: number): number {
+  if (!Number.isFinite(limit)) return DEFAULT_FIRECRAWL_LIMIT;
+  const wholeLimit = Math.floor(limit);
+  return Math.min(Math.max(wholeLimit, MIN_DETAILED_RESEARCH_SOURCES), MAX_FIRECRAWL_SEARCH_LIMIT);
 }
 
 function extractSearchItems(data: FirecrawlSearchResponse["data"]): FirecrawlSearchItem[] {
@@ -103,6 +114,14 @@ export function buildResearchContext(result?: ResearchResult): string {
 
 function getSourceUrl(item: FirecrawlSearchItem): string {
   return item.url ?? item.metadata?.sourceURL ?? item.metadata?.url ?? "";
+}
+
+function getSourceDetail(item: FirecrawlSearchItem): string {
+  return item.markdown ?? item.content ?? item.snippet ?? item.description ?? item.metadata?.description ?? "";
+}
+
+function hasDetailedSource(item: FirecrawlSearchItem): boolean {
+  return Boolean(getSourceUrl(item) && getSourceDetail(item).trim());
 }
 
 function normalizeSource(item: FirecrawlSearchItem): ResearchSource {

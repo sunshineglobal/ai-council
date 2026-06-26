@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { councilRunSchema } from "@/lib/validation";
+import { MAX_FIRECRAWL_SEARCH_LIMIT, MIN_DETAILED_RESEARCH_SOURCES } from "@/lib/firecrawl";
+import { councilRunSchema, researchSchema } from "@/lib/validation";
 
 describe("council run validation", () => {
   it("accepts a valid council run", () => {
@@ -58,6 +59,35 @@ describe("council run validation", () => {
           "00000000-0000-4000-8000-000000000005",
           "00000000-0000-4000-8000-000000000006"
         ]
+      })
+    ).toThrow();
+  });
+});
+
+describe("research validation", () => {
+  it("accepts at least fifteen requested sources", () => {
+    expect(() =>
+      researchSchema.parse({
+        query: "latest research",
+        limit: MIN_DETAILED_RESEARCH_SOURCES
+      })
+    ).not.toThrow();
+  });
+
+  it("rejects source limits below the research floor", () => {
+    expect(() =>
+      researchSchema.parse({
+        query: "latest research",
+        limit: MIN_DETAILED_RESEARCH_SOURCES - 1
+      })
+    ).toThrow();
+  });
+
+  it("rejects source limits above the Firecrawl cap", () => {
+    expect(() =>
+      researchSchema.parse({
+        query: "latest research",
+        limit: MAX_FIRECRAWL_SEARCH_LIMIT + 1
       })
     ).toThrow();
   });
