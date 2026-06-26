@@ -12,12 +12,24 @@ type FirecrawlSearchItem = {
   title?: string;
   url?: string;
   description?: string;
+  snippet?: string;
   markdown?: string;
   content?: string;
+  metadata?: {
+    title?: string;
+    description?: string;
+    sourceURL?: string;
+    url?: string;
+  };
+};
+
+type FirecrawlSearchData = {
+  web?: FirecrawlSearchItem[];
+  news?: FirecrawlSearchItem[];
 };
 
 type FirecrawlSearchResponse = {
-  data?: FirecrawlSearchItem[];
+  data?: FirecrawlSearchItem[] | FirecrawlSearchData;
   creditsUsed?: number;
   credits_used?: number;
 };
@@ -37,8 +49,9 @@ export async function searchWithFirecrawl(query: string, limit = 5): Promise<Res
     body: JSON.stringify({
       query,
       limit,
+      sources: ["web"],
       scrapeOptions: {
-        formats: ["markdown"],
+        formats: [{ type: "markdown" }],
         onlyMainContent: true
       }
     })
@@ -51,8 +64,8 @@ export async function searchWithFirecrawl(query: string, limit = 5): Promise<Res
 
   const body = (await response.json()) as FirecrawlSearchResponse;
   const credits = body.creditsUsed ?? body.credits_used ?? 0;
-  const sources = (body.data ?? [])
-    .filter((item) => item.url)
+  const sources = extractSearchItems(body.data)
+    .filter((item) => getSourceUrl(item))
     .slice(0, limit)
     .map(normalizeSource);
 
@@ -70,6 +83,12 @@ export async function searchWithFirecrawl(query: string, limit = 5): Promise<Res
   return result;
 }
 
+function extractSearchItems(data: FirecrawlSearchResponse["data"]): FirecrawlSearchItem[] {
+  if (Array.isArray(data)) return data;
+  if (!data) return [];
+  return [...(data.web ?? []), ...(data.news ?? [])];
+}
+
 export function buildResearchContext(result?: ResearchResult): string {
   if (!result || result.sources.length === 0) return "";
 
@@ -82,12 +101,17 @@ export function buildResearchContext(result?: ResearchResult): string {
   ].join("\n\n");
 }
 
+function getSourceUrl(item: FirecrawlSearchItem): string {
+  return item.url ?? item.metadata?.sourceURL ?? item.metadata?.url ?? "";
+}
+
 function normalizeSource(item: FirecrawlSearchItem): ResearchSource {
+  const url = getSourceUrl(item);
   const markdown = item.markdown ?? item.content ?? "";
-  const description = item.description ?? "";
+  const description = item.description ?? item.snippet ?? item.metadata?.description ?? "";
   return {
-    title: item.title || item.url || "Untitled source",
-    url: item.url ?? "",
+    title: item.title || item.metadata?.title || url || "Untitled source",
+    url,
     description,
     markdown,
     snippet: markdown.slice(0, 500) || description.slice(0, 500)

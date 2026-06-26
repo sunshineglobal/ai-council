@@ -71,10 +71,55 @@ describe("Firecrawl research context", () => {
     expect(JSON.parse(init.body as string)).toEqual({
       query: "latest world news",
       limit: 5,
+      sources: ["web"],
       scrapeOptions: {
-        formats: ["markdown"],
+        formats: [{ type: "markdown" }],
         onlyMainContent: true
       }
+    });
+  });
+
+  it("normalizes the current Firecrawl data.web response shape", async () => {
+    process.env.FIRECRAWL_API_KEY = "test-key";
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: {
+            web: [
+              {
+                title: "Firecrawl Search",
+                url: "https://example.com/search",
+                description: "Search result description.",
+                markdown: "Search result markdown."
+              },
+              {
+                metadata: {
+                  title: "Metadata URL",
+                  sourceURL: "https://example.com/metadata",
+                  description: "Metadata description."
+                }
+              }
+            ]
+          },
+          creditsUsed: 1
+        }),
+        { status: 200 }
+      )
+    );
+
+    const result = await searchWithFirecrawl("latest world news", 5);
+
+    expect(result.sources).toHaveLength(2);
+    expect(result.sources[0]).toMatchObject({
+      title: "Firecrawl Search",
+      url: "https://example.com/search",
+      snippet: "Search result markdown."
+    });
+    expect(result.sources[1]).toMatchObject({
+      title: "Metadata URL",
+      url: "https://example.com/metadata",
+      description: "Metadata description.",
+      snippet: "Metadata description."
     });
   });
 
