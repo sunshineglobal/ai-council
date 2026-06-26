@@ -122,6 +122,54 @@ describe("Firecrawl research context", () => {
     expect(result.sources.map((source) => source.url)).toEqual(["https://example.com/news", "https://example.com/markets"]);
   });
 
+  it("retries transient OpenRouter Firecrawl HTTP failures once", async () => {
+    process.env.OPENROUTER_API_KEY = "test-key";
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: {
+              message: "Internal Server Error",
+              code: 500
+            }
+          }),
+          { status: 500 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: "Recovered summary.",
+                  annotations: [
+                    {
+                      type: "url_citation",
+                      url_citation: {
+                        title: "Recovered Source",
+                        url: "https://example.com/recovered",
+                        content: "Recovered context."
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }),
+          { status: 200 }
+        )
+      );
+
+    const result = await searchWithFirecrawl("latest world news", 5);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.sources[0]).toMatchObject({
+      title: "Recovered Source",
+      url: "https://example.com/recovered"
+    });
+  });
+
   it("rejects OpenRouter web search errors clearly", async () => {
     process.env.OPENROUTER_API_KEY = "test-key";
     vi.spyOn(globalThis, "fetch").mockResolvedValue(

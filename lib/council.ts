@@ -291,7 +291,7 @@ async function runResearchStage(
   runId: string,
   context: RunContext,
   usageEvents: UsageEvent[]
-): Promise<ResearchResult> {
+): Promise<ResearchResult | undefined> {
   await emit(context, { type: "stage", stage: "research_context", message: "Searching the web with Firecrawl." });
 
   const cacheKey = prompt.trim().toLowerCase().slice(0, 500);
@@ -318,7 +318,33 @@ async function runResearchStage(
     return cached;
   }
 
-  const research = await searchWithFirecrawl(prompt, DEFAULT_FIRECRAWL_LIMIT);
+  let research: ResearchResult;
+  try {
+    research = await searchWithFirecrawl(prompt, DEFAULT_FIRECRAWL_LIMIT);
+  } catch (error) {
+    const message = getErrorMessage(error, "Firecrawl research failed.");
+    console.warn("[council] Firecrawl research failed; continuing without web context", {
+      runId,
+      userId: context.userId,
+      ...getErrorLog(error)
+    });
+    const usage = buildUsageEvent({
+      stage: "research_context",
+      modelId: "firecrawl",
+      usage: { ...emptyUsage(), estimated: true },
+      latencyMs: 0,
+      status: "error"
+    });
+    usageEvents.push(usage);
+    await persistRunUsage(runId, context.userId, usage);
+    await emit(context, {
+      type: "stage",
+      stage: "research_context",
+      message: `Firecrawl research failed; continuing without web context. ${compactText(message, 180)}`
+    });
+    await emit(context, { type: "usage", usage });
+    return undefined;
+  }
   researchCache.set(cacheKey, research);
 
   const usage = buildUsageEvent({

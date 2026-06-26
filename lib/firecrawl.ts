@@ -4,9 +4,10 @@ import { estimateTokens } from "@/lib/token-usage";
 import { TtlCache } from "@/lib/cache";
 
 const OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions";
-const DEFAULT_RESEARCH_MODEL = "openai/gpt-4o-mini";
+const DEFAULT_RESEARCH_MODEL = "deepseek/deepseek-v4-flash";
 const RESEARCH_CONTEXT_CHARS_PER_SOURCE = 900;
 const RESEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_FIRECRAWL_ATTEMPTS = 2;
 const researchCache = new TtlCache<string, ResearchResult>(RESEARCH_CACHE_TTL_MS, 64);
 
 type OpenRouterCitation = {
@@ -42,8 +43,52 @@ export async function searchWithFirecrawl(query: string, limit = 5): Promise<Res
   const cached = cacheEnabled ? researchCache.get(cacheKey) : undefined;
   if (cached) return cached;
 
+  const response = await fetchFirecrawlResearch(query, limit);
+
+  const body = (await response.json()) as OpenRouterWebSearchResponse;
+  if (body.error) {
+    throw new Error(`OpenRouter Firecrawl web search failed: ${formatOpenRouterError(body.error)}`);
+  }
+
+  const message = body.choices?.[0]?.message;
+  const summary = normalizeMessageContent(message?.content);
+  const sources = extractCitationSources(message?.annotations, summary)
+    .slice(0, limit)
+    .map(normalizeSource);
+
+  const context = buildResearchContext({ query, sources, credits: 0, estimatedContextTokens: 0 });
+
+  const result: ResearchResult = {
+    query,
+    sources,
+    credits: 0,
+    estimatedContextTokens: estimateTokens(context)
+  };
+  if (cacheEnabled) {
+    researchCache.set(cacheKey, result);
+  }
+  return result;
+}
+
+async function fetchFirecrawlResearch(query: string, limit: number): Promise<Response> {
+  let lastStatus = 0;
+  let lastDetails = "";
+
+  for (let attempt = 1; attempt <= MAX_FIRECRAWL_ATTEMPTS; attempt += 1) {
+    const response = await fetch(OPENROUTER_CHAT_COMPLETIONS_URL, buildFirecrawlRequest(query, limit));
+    if (response.ok) return response;
+
+    lastStatus = response.status;
+    lastDetails = await response.text().catch(() => "");
+    if (!isRetriableStatus(response.status) || attempt === MAX_FIRECRAWL_ATTEMPTS) break;
+  }
+
+  throw new Error(`OpenRouter Firecrawl web search failed (${lastStatus}): ${lastDetails || "Internal Server Error"}`);
+}
+
+function buildFirecrawlRequest(query: string, limit: number): RequestInit {
   const model = getOptionalEnv("OPENROUTER_RESEARCH_MODEL") ?? DEFAULT_RESEARCH_MODEL;
-  const response = await fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
+  return {
     method: "POST",
     headers: {
       Authorization: `Bearer ${getEnv("OPENROUTER_API_KEY")}`,
@@ -76,36 +121,11 @@ export async function searchWithFirecrawl(query: string, limit = 5): Promise<Res
         }
       ]
     })
-  });
-
-  if (!response.ok) {
-    const details = await response.text().catch(() => "");
-    throw new Error(`OpenRouter Firecrawl web search failed (${response.status}): ${details || response.statusText}`);
-  }
-
-  const body = (await response.json()) as OpenRouterWebSearchResponse;
-  if (body.error) {
-    throw new Error(`OpenRouter Firecrawl web search failed: ${formatOpenRouterError(body.error)}`);
-  }
-
-  const message = body.choices?.[0]?.message;
-  const summary = normalizeMessageContent(message?.content);
-  const sources = extractCitationSources(message?.annotations, summary)
-    .slice(0, limit)
-    .map(normalizeSource);
-
-  const context = buildResearchContext({ query, sources, credits: 0, estimatedContextTokens: 0 });
-
-  const result: ResearchResult = {
-    query,
-    sources,
-    credits: 0,
-    estimatedContextTokens: estimateTokens(context)
   };
-  if (cacheEnabled) {
-    researchCache.set(cacheKey, result);
-  }
-  return result;
+}
+
+function isRetriableStatus(status: number): boolean {
+  return status === 429 || status >= 500;
 }
 
 export function buildResearchContext(result?: ResearchResult): string {
