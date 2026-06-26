@@ -63,13 +63,22 @@ export async function completeWithOpenRouter(params: {
   temperature?: number;
   maxTokens?: number;
   responseFormat?: "json_object";
+  cacheControl?: boolean;
 }): Promise<CompletionResult> {
   const started = Date.now();
   let response;
+  const processedMessages = params.cacheControl
+    ? params.messages.map((msg, idx) => {
+        if (idx === 0 || idx === 1 || (idx === params.messages.length - 1 && params.messages.length > 2)) {
+          return { ...msg, cache_control: { type: "ephemeral" as const } };
+        }
+        return msg;
+      })
+    : params.messages;
   try {
     response = await getOpenRouterClient().chat.completions.create({
       model: params.model,
-      messages: params.messages,
+      messages: processedMessages as typeof params.messages,
       temperature: params.temperature ?? 0.4,
       max_tokens: params.maxTokens ?? 1600,
       response_format: params.responseFormat ? { type: params.responseFormat } : undefined

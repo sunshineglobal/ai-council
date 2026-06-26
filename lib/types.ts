@@ -152,5 +152,8 @@ export type CouncilEvent =
   | { type: "research"; research: ResearchResult }
   | { type: "stage"; stage: CouncilStage; modelId?: string; message: string }
   | { type: "usage"; usage: UsageEvent }
+  | { type: "model_response"; response: StageResult }
+  | { type: "critique"; critique: CritiqueResult }
+  | { type: "judge"; judge: JudgeResult }
   | { type: "complete"; result: CouncilRunResult }
   | { type: "error"; message: string };

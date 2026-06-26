@@ -1,9 +1,13 @@
 import { getAppUrl, getEnv, getOptionalEnv } from "@/lib/env";
 import type { ResearchResult, ResearchSource } from "@/lib/types";
 import { estimateTokens } from "@/lib/token-usage";
+import { TtlCache } from "@/lib/cache";
 
 const OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_RESEARCH_MODEL = "openai/gpt-4o-mini";
+const RESEARCH_CONTEXT_CHARS_PER_SOURCE = 900;
+const RESEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const researchCache = new TtlCache<string, ResearchResult>(RESEARCH_CACHE_TTL_MS, 64);
 
 type OpenRouterCitation = {
   title?: string;
@@ -33,6 +37,11 @@ type OpenRouterWebSearchResponse = {
 };
 
 export async function searchWithFirecrawl(query: string, limit = 5): Promise<ResearchResult> {
+  const cacheKey = `${limit}::${query.trim().toLowerCase()}`;
+  const cacheEnabled = process.env.NODE_ENV !== "test";
+  const cached = cacheEnabled ? researchCache.get(cacheKey) : undefined;
+  if (cached) return cached;
+
   const model = getOptionalEnv("OPENROUTER_RESEARCH_MODEL") ?? DEFAULT_RESEARCH_MODEL;
   const response = await fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
     method: "POST",
@@ -87,12 +96,16 @@ export async function searchWithFirecrawl(query: string, limit = 5): Promise<Res
 
   const context = buildResearchContext({ query, sources, credits: 0, estimatedContextTokens: 0 });
 
-  return {
+  const result: ResearchResult = {
     query,
     sources,
     credits: 0,
     estimatedContextTokens: estimateTokens(context)
   };
+  if (cacheEnabled) {
+    researchCache.set(cacheKey, result);
+  }
+  return result;
 }
 
 export function buildResearchContext(result?: ResearchResult): string {
@@ -101,7 +114,7 @@ export function buildResearchContext(result?: ResearchResult): string {
   return [
     `Research query: ${result.query}`,
     ...result.sources.map((source, index) => {
-      const excerpt = (source.markdown || source.snippet || source.description || "").slice(0, 1800);
+      const excerpt = (source.markdown || source.snippet || source.description || "").slice(0, RESEARCH_CONTEXT_CHARS_PER_SOURCE);
       return `[${index + 1}] ${source.title}\nURL: ${source.url}\n${excerpt}`;
     })
   ].join("\n\n");

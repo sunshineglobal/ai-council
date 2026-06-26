@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, ExternalLink } from "lucide-react";
-import { MarkdownBlock } from "@/components/markdown-block";
+import { MarkdownView as MarkdownBlock } from "@/components/markdown-view";
 import type { CouncilRunResult } from "@/lib/types";
 
 export function RunTrace({ result }: { result: CouncilRunResult }) {

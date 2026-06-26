@@ -20,9 +20,37 @@ import type {
   StageResult,
   UsageEvent
 } from "@/lib/types";
+import { TtlCache } from "@/lib/cache";
 
 const MAX_MODELS = 8;
 const DEFAULT_FIRECRAWL_LIMIT = 5;
+const PEER_ANSWER_CONTEXT_CHARS = 3200;
+const CRITIQUE_ROUND_CONTEXT_CHARS = 2400;
+
+const researchCache = new TtlCache<string, ResearchResult>(10 * 60 * 1000, 64);
+const answerCache = new TtlCache<string, StageResult>(15 * 60 * 1000, 128);
+const critiqueCache = new TtlCache<string, CritiqueResult>(15 * 60 * 1000, 192);
+const revisionCache = new TtlCache<string, StageResult>(15 * 60 * 1000, 128);
+const judgeCache = new TtlCache<string, JudgeResult>(15 * 60 * 1000, 64);
+
+function simpleHash(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = (hash << 5) - hash + char;
+    hash |= 0;
+  }
+  return hash.toString(36);
+}
+
+function makeAnswerCacheKey(modelId: string, prompt: string, researchContext: string, attachmentContext: string): string {
+  return `${modelId}:${simpleHash(prompt)}:${simpleHash(researchContext)}:${simpleHash(attachmentContext)}`;
+}
+
+function makeMessagesCacheKey(stage: CouncilStage, modelId: string, messages: ChatCompletionMessageParam[]): string {
+  const cacheText = messages.map((message) => `${message.role}:${normalizePromptContent(message.content)}`).join("\n\n---\n\n");
+  return `${stage}:${modelId}:${simpleHash(cacheText)}`;
+}
 
 type RunContext = {
   userId: string;
@@ -265,7 +293,34 @@ async function runResearchStage(
   usageEvents: UsageEvent[]
 ): Promise<ResearchResult> {
   await emit(context, { type: "stage", stage: "research_context", message: "Searching the web with Firecrawl." });
+
+  const cacheKey = prompt.trim().toLowerCase().slice(0, 500);
+  const cached = researchCache.get(cacheKey);
+  if (cached) {
+    await emit(context, { type: "stage", stage: "research_context", message: "Using cached research results." });
+    const usage = buildUsageEvent({
+      stage: "research_context",
+      modelId: "firecrawl",
+      usage: {
+        promptTokens: cached.estimatedContextTokens,
+        completionTokens: 0,
+        totalTokens: cached.estimatedContextTokens,
+        estimated: true
+      },
+      latencyMs: 0,
+      status: "estimated"
+    });
+    usageEvents.push(usage);
+    await persistRunUsage(runId, context.userId, usage);
+    await persistResearchResult(runId, context.userId, saveHistory, cached);
+    await emit(context, { type: "research", research: cached });
+    await emit(context, { type: "usage", usage });
+    return cached;
+  }
+
   const research = await searchWithFirecrawl(prompt, DEFAULT_FIRECRAWL_LIMIT);
+  researchCache.set(cacheKey, research);
+
   const usage = buildUsageEvent({
     stage: "research_context",
     modelId: "firecrawl",
@@ -280,18 +335,7 @@ async function runResearchStage(
   });
   usageEvents.push(usage);
   await persistRunUsage(runId, context.userId, usage);
-
-  const admin = createSupabaseAdminClient();
-  const { error } = await admin.from("research_results").insert({
-    run_id: runId,
-    user_id: context.userId,
-    query: saveHistory ? research.query : null,
-    results: saveHistory ? research.sources : null,
-    result_count: research.sources.length,
-    firecrawl_credits: research.credits,
-    saved_mode: saveHistory
-  });
-  assertSupabaseOk("saving research results", error);
+  await persistResearchResult(runId, context.userId, saveHistory, research);
 
   await emit(context, { type: "research", research });
   await emit(context, { type: "usage", usage });
@@ -310,8 +354,39 @@ async function runInitialStage(
   await emit(context, { type: "stage", stage: "initial_answer", message: "Collecting initial answers." });
 
   return Promise.all(
-    input.models.map((modelId) =>
-      callModelStage({
+    input.models.map(async (modelId) => {
+      const cacheKey = makeAnswerCacheKey(modelId, input.prompt, researchContext, attachmentContext);
+      const cached = answerCache.get(cacheKey);
+      if (cached) {
+        await emit(context, {
+          type: "stage",
+          stage: "initial_answer",
+          message: `Using cached initial answer for ${modelId}.`
+        });
+        const usage = buildUsageEvent({
+          stage: "initial_answer",
+          modelId,
+          usage: { ...emptyUsage(), estimated: true },
+          latencyMs: 0,
+          status: "estimated",
+          pricing: pricingByModel[modelId]
+        });
+        usageEvents.push(usage);
+        await persistRunUsage(runId, context.userId, usage);
+        await emit(context, { type: "usage", usage });
+
+        const runSpecificResult = {
+          ...cached,
+          id: crypto.randomUUID(),
+          usage: emptyUsage(),
+          latencyMs: 0
+        };
+        await persistModelResponse(runId, input.saveHistory, runSpecificResult);
+        await emit(context, { type: "model_response", response: runSpecificResult });
+        return runSpecificResult;
+      }
+
+      const result = await callModelStage({
         modelId,
         stage: "initial_answer",
         messages: buildInitialMessages(input.prompt, researchContext, attachmentContext),
@@ -321,8 +396,13 @@ async function runInitialStage(
         usageEvents,
         pricingByModel,
         context
-      })
-    )
+      });
+
+      if (result.status === "complete") {
+        answerCache.set(cacheKey, result);
+      }
+      return result;
+    })
   );
 }
 
@@ -345,18 +425,46 @@ async function runCritiqueRound(params: {
   });
 
   return Promise.all(
-    params.input.models.map((modelId) =>
-      callCritiqueStage({
+    params.input.models.map(async (modelId) => {
+      const messages = buildCritiqueMessages({
         modelId,
-        messages: buildCritiqueMessages({
+        prompt: params.input.prompt,
+        researchContext: params.researchContext,
+        attachmentContext: params.attachmentContext,
+        initialResponses: params.initialResponses,
+        previousRounds: params.previousRounds,
+        roundIndex: params.roundIndex
+      });
+      const cacheKey = makeMessagesCacheKey("debate_critique", modelId, messages);
+      const cached = critiqueCache.get(cacheKey);
+      if (cached) {
+        await emit(params.context, {
+          type: "stage",
+          stage: "debate_critique",
+          message: `Using cached debate critique for ${modelId}.`
+        });
+        const usage = await recordCachedUsage({
+          runId: params.runId,
+          userId: params.context.userId,
+          stage: "debate_critique",
           modelId,
-          prompt: params.input.prompt,
-          researchContext: params.researchContext,
-          attachmentContext: params.attachmentContext,
-          initialResponses: params.initialResponses,
-          previousRounds: params.previousRounds,
-          roundIndex: params.roundIndex
-        }),
+          usageEvents: params.usageEvents
+        });
+        const result: CritiqueResult = {
+          ...cached,
+          id: crypto.randomUUID(),
+          usage: emptyUsage(),
+          latencyMs: 0
+        };
+        await persistCritique(params.runId, params.input.saveHistory, result);
+        await emit(params.context, { type: "critique", critique: result });
+        await emit(params.context, { type: "usage", usage });
+        return result;
+      }
+
+      const result = await callCritiqueStage({
+        modelId,
+        messages,
         saveHistory: params.input.saveHistory,
         roundIndex: params.roundIndex,
         runId: params.runId,
@@ -364,8 +472,12 @@ async function runCritiqueRound(params: {
         usageEvents: params.usageEvents,
         pricingByModel: params.pricingByModel,
         context: params.context
-      })
-    )
+      });
+      if (result.status === "complete") {
+        critiqueCache.set(cacheKey, result);
+      }
+      return result;
+    })
   );
 }
 
@@ -383,26 +495,58 @@ async function runRevisionStage(params: {
   await emit(params.context, { type: "stage", stage: "revision", message: "Asking models to revise their answers." });
 
   return Promise.all(
-    params.input.models.map((modelId) =>
-      callModelStage({
+    params.input.models.map(async (modelId) => {
+      const messages = buildRevisionMessages({
+        modelId,
+        prompt: params.input.prompt,
+        researchContext: params.researchContext,
+        attachmentContext: params.attachmentContext,
+        initialResponses: params.initialResponses,
+        critiqueRounds: params.critiqueRounds
+      });
+      const cacheKey = makeMessagesCacheKey("revision", modelId, messages);
+      const cached = revisionCache.get(cacheKey);
+      if (cached) {
+        await emit(params.context, {
+          type: "stage",
+          stage: "revision",
+          message: `Using cached revision for ${modelId}.`
+        });
+        const usage = await recordCachedUsage({
+          runId: params.runId,
+          userId: params.context.userId,
+          stage: "revision",
+          modelId,
+          usageEvents: params.usageEvents
+        });
+        const result: StageResult = {
+          ...cached,
+          id: crypto.randomUUID(),
+          usage: emptyUsage(),
+          latencyMs: 0
+        };
+        await persistModelResponse(params.runId, params.input.saveHistory, result);
+        await emit(params.context, { type: "model_response", response: result });
+        await emit(params.context, { type: "usage", usage });
+        return result;
+      }
+
+      const result = await callModelStage({
         modelId,
         stage: "revision",
-        messages: buildRevisionMessages({
-          modelId,
-          prompt: params.input.prompt,
-          researchContext: params.researchContext,
-          attachmentContext: params.attachmentContext,
-          initialResponses: params.initialResponses,
-          critiqueRounds: params.critiqueRounds
-        }),
+        messages,
         saveHistory: params.input.saveHistory,
         runId: params.runId,
         userId: params.context.userId,
         usageEvents: params.usageEvents,
         pricingByModel: params.pricingByModel,
         context: params.context
-      })
-    )
+      });
+      if (result.status === "complete") {
+        revisionCache.set(cacheKey, result);
+      }
+      return result;
+    })
   );
 }
 
@@ -428,13 +572,40 @@ async function runJudgeStage(params: {
   const id = crypto.randomUUID();
   const promptText = buildJudgePrompt(params);
   const messages: ChatCompletionMessageParam[] = [
-    {
-      role: "system",
-      content:
-        "You are a rigorous judge for a private AI model council. Return valid JSON only, with fair rankings and a final answer that is better than any individual response."
-    },
+    ...buildSharedPrefixMessages(
+      params.input.prompt,
+      params.research ? buildResearchContext(params.research) : "",
+      params.attachmentContext
+    ),
     { role: "user", content: promptText }
   ];
+  const cacheKey = makeMessagesCacheKey("judge_synthesis", params.input.judgeModel, messages);
+  const cached = judgeCache.get(cacheKey);
+  if (cached) {
+    await emit(params.context, {
+      type: "stage",
+      stage: "judge_synthesis",
+      modelId: params.input.judgeModel,
+      message: `Using cached judge synthesis for ${params.input.judgeModel}.`
+    });
+    const usage = await recordCachedUsage({
+      runId: params.runId,
+      userId: params.context.userId,
+      stage: "judge_synthesis",
+      modelId: params.input.judgeModel,
+      usageEvents: params.usageEvents
+    });
+    const result: JudgeResult = {
+      ...cached,
+      id,
+      usage: emptyUsage(),
+      latencyMs: 0
+    };
+    await persistJudge(params.runId, params.input.saveHistory, result);
+    await emit(params.context, { type: "judge", judge: result });
+    await emit(params.context, { type: "usage", usage });
+    return result;
+  }
 
   let completion: CompletionResult;
   try {
@@ -444,7 +615,8 @@ async function runJudgeStage(params: {
         messages,
         temperature: 0.2,
         maxTokens: 2200,
-        responseFormat: "json_object"
+        responseFormat: "json_object",
+        cacheControl: true
       });
     } catch (error) {
       console.warn("[council] judge JSON mode failed, retrying without response_format", {
@@ -456,7 +628,8 @@ async function runJudgeStage(params: {
         model: params.input.judgeModel,
         messages,
         temperature: 0.2,
-        maxTokens: 2200
+        maxTokens: 2200,
+        cacheControl: true
       });
     }
 
@@ -473,6 +646,7 @@ async function runJudgeStage(params: {
       error: message
     };
     await persistJudge(params.runId, params.input.saveHistory, failedResult);
+    await emit(params.context, { type: "judge", judge: failedResult });
     return failedResult;
   }
 
@@ -489,6 +663,7 @@ async function runJudgeStage(params: {
   };
 
   await persistJudge(params.runId, params.input.saveHistory, result);
+  judgeCache.set(cacheKey, result);
   await recordUsage({
     runId: params.runId,
     userId: params.context.userId,
@@ -499,6 +674,7 @@ async function runJudgeStage(params: {
     usageEvents: params.usageEvents,
     context: params.context
   });
+  await emit(params.context, { type: "judge", judge: result });
 
   return result;
 }
@@ -521,7 +697,8 @@ async function callModelStage(params: {
       model: params.modelId,
       messages: params.messages,
       temperature: params.stage === "initial_answer" ? 0.55 : 0.35,
-      maxTokens: 1800
+      maxTokens: 1800,
+      cacheControl: true
     });
   } catch (error) {
     const message = getErrorMessage(error, "Model call failed.");
@@ -536,6 +713,7 @@ async function callModelStage(params: {
       error: message
     };
     await persistModelResponse(params.runId, params.saveHistory, result);
+    await emit(params.context, { type: "model_response", response: result });
     return result;
   }
 
@@ -559,6 +737,7 @@ async function callModelStage(params: {
     usageEvents: params.usageEvents,
     context: params.context
   });
+  await emit(params.context, { type: "model_response", response: result });
   return result;
 }
 
@@ -580,7 +759,8 @@ async function callCritiqueStage(params: {
       model: params.modelId,
       messages: params.messages,
       temperature: 0.45,
-      maxTokens: 1400
+      maxTokens: 1400,
+      cacheControl: true
     });
   } catch (error) {
     const message = getErrorMessage(error, "Critique call failed.");
@@ -595,6 +775,7 @@ async function callCritiqueStage(params: {
       error: message
     };
     await persistCritique(params.runId, params.saveHistory, result);
+    await emit(params.context, { type: "critique", critique: result });
     return result;
   }
 
@@ -618,15 +799,16 @@ async function callCritiqueStage(params: {
     usageEvents: params.usageEvents,
     context: params.context
   });
+  await emit(params.context, { type: "critique", critique: result });
   return result;
 }
 
-function buildInitialMessages(prompt: string, researchContext: string, attachmentContext: string): ChatCompletionMessageParam[] {
+function buildSharedPrefixMessages(prompt: string, researchContext: string, attachmentContext: string): ChatCompletionMessageParam[] {
   return [
     {
       role: "system",
       content:
-        "You are one member of a private AI council. Produce an independent, high-quality answer. Use the supplied research context when relevant and cite sources as [1], [2], etc."
+        "You are a member or judge of a private AI council participating in a collaborative intelligence process."
     },
     {
       role: "user",
@@ -637,8 +819,75 @@ function buildInitialMessages(prompt: string, researchContext: string, attachmen
       ]
         .filter(Boolean)
         .join("\n\n")
+    },
+    {
+      role: "assistant",
+      content: "Acknowledged. Please provide the specific instructions and inputs for the current stage."
     }
   ];
+}
+
+function buildInitialMessages(prompt: string, researchContext: string, attachmentContext: string): ChatCompletionMessageParam[] {
+  return [
+    ...buildSharedPrefixMessages(prompt, researchContext, attachmentContext),
+    {
+      role: "user",
+      content:
+        "Produce an independent, high-quality answer to the user prompt. Use the supplied research and file contexts when relevant. Cite sources as [1], [2], etc."
+    }
+  ];
+}
+
+function programmaticSummarize(text: string, maxTokens: number = 200): string {
+  if (!text) return "";
+  const maxChars = maxTokens * 4.5;
+  if (text.length <= maxChars) return text;
+
+  const lines = text.split("\n");
+  const extractedLines: string[] = [];
+  let currentLength = 0;
+
+  // Keep first few paragraphs as intro summary
+  let introCount = 0;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("#") || trimmed === "") continue;
+    extractedLines.push(line);
+    currentLength += line.length + 1;
+    introCount++;
+    if (introCount >= 3 || currentLength > maxChars * 0.45) break;
+  }
+
+  // Scan for markdown headers and short summary bullets
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]?.trim() ?? "";
+    if (line.startsWith("#")) {
+      extractedLines.push(line);
+      currentLength += line.length + 1;
+      
+      // Keep first line under header
+      for (let j = i + 1; j < lines.length; j++) {
+        const nextLine = lines[j]?.trim();
+        if (nextLine && !nextLine.startsWith("#")) {
+          extractedLines.push("  " + nextLine);
+          currentLength += nextLine.length + 3;
+          break;
+        }
+      }
+    } else if (line.startsWith("-") || line.startsWith("*") || /^\d+\./.test(line)) {
+      if (currentLength < maxChars * 0.8 && line.length < 150) {
+        extractedLines.push(line);
+        currentLength += line.length + 1;
+      }
+    }
+    if (currentLength > maxChars) break;
+  }
+
+  const result = extractedLines.join("\n").trim();
+  if (result.length > maxChars) {
+    return result.slice(0, maxChars) + "\n...[truncated summary]";
+  }
+  return result;
 }
 
 function buildCritiqueMessages(params: {
@@ -651,28 +900,29 @@ function buildCritiqueMessages(params: {
   roundIndex: number;
 }): ChatCompletionMessageParam[] {
   const peerResponses = params.initialResponses
-    .map((response) => `${response.modelId}${response.modelId === params.modelId ? " (you)" : ""}:\n${response.content || response.error}`)
+    .filter((response) => response.modelId !== params.modelId || response.content)
+    .map((response) => {
+      const label = `${response.modelId}${response.modelId === params.modelId ? " (you)" : ""}`;
+      const body = response.content
+        ? (response.modelId === params.modelId ? truncate(response.content, PEER_ANSWER_CONTEXT_CHARS) : programmaticSummarize(response.content, 200))
+        : `[no response: ${truncate(response.error ?? "empty", 160)}]`;
+      return `${label}:\n${body}`;
+    })
     .join("\n\n");
   const previous = params.previousRounds
     .flat()
-    .map((critique) => `Round ${critique.roundIndex} - ${critique.modelId}:\n${critique.content || critique.error}`)
+    .filter((critique) => critique.content || critique.error)
+    .map((critique) => `R${critique.roundIndex} ${critique.modelId}:\n${truncate(critique.content || critique.error || "", CRITIQUE_ROUND_CONTEXT_CHARS)}`)
     .join("\n\n");
 
   return [
-    {
-      role: "system",
-      content:
-        "You are debating as one council member. Critique the other answers, name concrete weaknesses, keep what is strong, and propose improvements. Be concise and evidence-driven."
-    },
+    ...buildSharedPrefixMessages(params.prompt, params.researchContext, params.attachmentContext),
     {
       role: "user",
       content: [
-        `Original prompt:\n${params.prompt}`,
-        params.researchContext && `Research context:\n${params.researchContext}`,
-        params.attachmentContext && `Attached file context:\n${params.attachmentContext}`,
         `Initial council answers:\n${peerResponses}`,
         previous && `Previous debate rounds:\n${previous}`,
-        `This is debate round ${params.roundIndex}. Respond as ${params.modelId}.`
+        `This is debate round ${params.roundIndex}. Critique the other answers, name concrete weaknesses, keep what is strong, and propose improvements. Be concise and evidence-driven. Respond as ${params.modelId}.`
       ]
         .filter(Boolean)
         .join("\n\n")
@@ -691,24 +941,18 @@ function buildRevisionMessages(params: {
   const ownInitial = params.initialResponses.find((response) => response.modelId === params.modelId)?.content ?? "";
   const critiques = params.critiqueRounds
     .flat()
-    .map((critique) => `Round ${critique.roundIndex} - ${critique.modelId}:\n${critique.content || critique.error}`)
+    .filter((critique) => critique.content || critique.error)
+    .map((critique) => `R${critique.roundIndex} ${critique.modelId}:\n${truncate(critique.content || critique.error || "", CRITIQUE_ROUND_CONTEXT_CHARS)}`)
     .join("\n\n");
 
   return [
-    {
-      role: "system",
-      content:
-        "You are revising your answer after a model-council debate. Preserve correct details, fix weaknesses, and produce your strongest final answer."
-    },
+    ...buildSharedPrefixMessages(params.prompt, params.researchContext, params.attachmentContext),
     {
       role: "user",
       content: [
-        `Original prompt:\n${params.prompt}`,
-        params.researchContext && `Research context:\n${params.researchContext}`,
-        params.attachmentContext && `Attached file context:\n${params.attachmentContext}`,
-        `Your initial answer:\n${ownInitial}`,
+        `Your initial answer:\n${truncate(ownInitial, PEER_ANSWER_CONTEXT_CHARS)}`,
         `Council critiques:\n${critiques}`,
-        "Write your revised answer now."
+        "Write your revised answer now. Preserve correct details, fix weaknesses, and produce your strongest final answer."
       ]
         .filter(Boolean)
         .join("\n\n")
@@ -716,39 +960,44 @@ function buildRevisionMessages(params: {
   ];
 }
 
+function truncate(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n...[truncated]`;
+}
+
+function normalizePromptContent(content: ChatCompletionMessageParam["content"]): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part === "object" && "text" in part) {
+          return String(part.text);
+        }
+        return "";
+      })
+      .join("");
+  }
+  return "";
+}
+
 function buildJudgePrompt(params: {
-  input: CouncilRunInput;
-  research?: ResearchResult;
-  attachmentContext: string;
   initialResponses: StageResult[];
   critiqueRounds: CritiqueResult[][];
   revisions: StageResult[];
 }) {
-  const sourceList =
-    params.research?.sources
-      .map((source, index) => `[${index + 1}] ${source.title} - ${source.url}`)
-      .join("\n") ?? "";
   const initial = params.initialResponses
-    .map((response) => `${response.modelId}:\n${response.content || response.error}`)
+    .map((response) => `${response.modelId}:\n${truncate(response.content || response.error || "", PEER_ANSWER_CONTEXT_CHARS)}`)
     .join("\n\n");
   const debate = params.critiqueRounds
     .flat()
-    .map((critique) => `Round ${critique.roundIndex} - ${critique.modelId}:\n${critique.content || critique.error}`)
+    .map((critique) => `R${critique.roundIndex} ${critique.modelId}:\n${truncate(critique.content || critique.error || "", CRITIQUE_ROUND_CONTEXT_CHARS)}`)
     .join("\n\n");
   const revisions = params.revisions
-    .map((response) => `${response.modelId}:\n${response.content || response.error}`)
+    .map((response) => `${response.modelId}:\n${truncate(response.content || response.error || "", PEER_ANSWER_CONTEXT_CHARS)}`)
     .join("\n\n");
 
-  return `Prompt:
-${params.input.prompt}
-
-Sources:
-${sourceList || "No web research was used."}
-
-Attached files:
-${params.attachmentContext || "No files were attached."}
-
-Initial answers:
+  return `Initial answers:
 ${initial}
 
 Debate:
@@ -771,7 +1020,14 @@ Return JSON with this shape:
 
 function parseJudgeOutput(content: string): { synthesis: string; rankings: JudgeRanking[] } {
   try {
-    const parsed = JSON.parse(content) as {
+    let cleanContent = content.trim();
+    if (cleanContent.startsWith("```json")) {
+      cleanContent = cleanContent.slice(7).trim();
+    }
+    if (cleanContent.endsWith("```")) {
+      cleanContent = cleanContent.slice(0, -3).trim();
+    }
+    const parsed = JSON.parse(cleanContent) as {
       final_answer?: string;
       consensus?: string;
       disagreements?: string[];
@@ -814,6 +1070,20 @@ async function persistModelResponse(runId: string, saveHistory: boolean, result:
     error: result.error ?? null
   });
   assertSupabaseOk("saving model response", error);
+}
+
+async function persistResearchResult(runId: string, userId: string, saveHistory: boolean, research: ResearchResult) {
+  const admin = createSupabaseAdminClient();
+  const { error } = await admin.from("research_results").insert({
+    run_id: runId,
+    user_id: userId,
+    query: saveHistory ? research.query : null,
+    results: saveHistory ? research.sources : null,
+    result_count: research.sources.length,
+    firecrawl_credits: research.credits,
+    saved_mode: saveHistory
+  });
+  assertSupabaseOk("saving research results", error);
 }
 
 async function persistCritique(runId: string, saveHistory: boolean, result: CritiqueResult) {
@@ -868,6 +1138,25 @@ async function recordUsage(params: {
   params.usageEvents.push(usage);
   await persistRunUsage(params.runId, params.userId, usage);
   await emit(params.context, { type: "usage", usage });
+}
+
+async function recordCachedUsage(params: {
+  runId: string;
+  userId: string;
+  stage: CouncilStage;
+  modelId: string;
+  usageEvents: UsageEvent[];
+}): Promise<UsageEvent> {
+  const usage = buildUsageEvent({
+    stage: params.stage,
+    modelId: params.modelId,
+    usage: { ...emptyUsage(), estimated: true },
+    latencyMs: 0,
+    status: "estimated"
+  });
+  params.usageEvents.push(usage);
+  await persistRunUsage(params.runId, params.userId, usage);
+  return usage;
 }
 
 async function persistRunUsage(runId: string, userId: string, usage: UsageEvent) {
