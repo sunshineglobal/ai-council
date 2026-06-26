@@ -1,6 +1,7 @@
 import { jsonError } from "@/lib/api";
 import { requireApiProfile } from "@/lib/auth";
 import { runCouncil } from "@/lib/council";
+import { getErrorLog, getErrorMessage } from "@/lib/errors";
 import { councilRunSchema } from "@/lib/validation";
 
 export const runtime = "nodejs";
@@ -12,10 +13,27 @@ export async function POST(request: Request) {
     const input = councilRunSchema.parse(await request.json());
     const encoder = new TextEncoder();
 
+    console.info("[council.stream] starting run", {
+      userId: profile.id,
+      modelCount: input.models.length,
+      judgeModel: input.judgeModel,
+      debateDepth: input.debateDepth,
+      researchEnabled: input.researchEnabled,
+      saveHistory: input.saveHistory
+    });
+
     const stream = new ReadableStream({
       start(controller) {
+        let closed = false;
+
         const send = (event: unknown, type = "message") => {
-          controller.enqueue(encoder.encode(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`));
+          if (closed) return;
+          try {
+            controller.enqueue(encoder.encode(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`));
+          } catch (error) {
+            closed = true;
+            console.warn("[council.stream] could not send event to client", getErrorLog(error));
+          }
         };
 
         runCouncil(input, {
@@ -24,15 +42,30 @@ export async function POST(request: Request) {
           onEvent: async (event) => send(event, event.type)
         })
           .catch((error) => {
+            const message = getErrorMessage(error, "Council run failed.");
+            console.error("[council.stream] run failed", {
+              userId: profile.id,
+              modelCount: input.models.length,
+              judgeModel: input.judgeModel,
+              ...getErrorLog(error)
+            });
             send(
               {
                 type: "error",
-                message: error instanceof Error ? error.message : "Council run failed."
+                message
               },
               "error"
             );
           })
-          .finally(() => controller.close());
+          .finally(() => {
+            if (closed) return;
+            closed = true;
+            try {
+              controller.close();
+            } catch (error) {
+              console.warn("[council.stream] could not close stream", getErrorLog(error));
+            }
+          });
       }
     });
 
@@ -44,6 +77,7 @@ export async function POST(request: Request) {
       }
     });
   } catch (error) {
+    console.error("[council.stream] request failed before stream start", getErrorLog(error));
     return jsonError(error);
   }
 }

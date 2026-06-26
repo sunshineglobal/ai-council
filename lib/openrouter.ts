@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import { getErrorMessage } from "@/lib/errors";
 import { getAppUrl, getEnv, getOptionalEnv } from "@/lib/env";
 import type { ModelOption, TokenUsage } from "@/lib/types";
 import { normalizeUsage } from "@/lib/token-usage";
@@ -29,7 +30,8 @@ export async function fetchOpenRouterModels(): Promise<ModelOption[]> {
   });
 
   if (!response.ok) {
-    throw new Error(`OpenRouter models request failed: ${response.status}`);
+    const details = await response.text().catch(() => "");
+    throw new Error(`OpenRouter models request failed (${response.status}): ${details || response.statusText}`);
   }
 
   const body = (await response.json()) as {
@@ -63,15 +65,28 @@ export async function completeWithOpenRouter(params: {
   responseFormat?: "json_object";
 }): Promise<CompletionResult> {
   const started = Date.now();
-  const response = await getOpenRouterClient().chat.completions.create({
-    model: params.model,
-    messages: params.messages,
-    temperature: params.temperature ?? 0.4,
-    max_tokens: params.maxTokens ?? 1600,
-    response_format: params.responseFormat ? { type: params.responseFormat } : undefined
-  });
+  let response;
+  try {
+    response = await getOpenRouterClient().chat.completions.create({
+      model: params.model,
+      messages: params.messages,
+      temperature: params.temperature ?? 0.4,
+      max_tokens: params.maxTokens ?? 1600,
+      response_format: params.responseFormat ? { type: params.responseFormat } : undefined
+    });
+  } catch (error) {
+    throw new Error(`OpenRouter request failed for ${params.model}: ${getErrorMessage(error)}`);
+  }
+
+  if (!response.choices.length) {
+    throw new Error(`OpenRouter returned no choices for ${params.model}.`);
+  }
 
   const content = normalizeMessageContent(response.choices[0]?.message?.content);
+  if (!content.trim()) {
+    throw new Error(`OpenRouter returned an empty response for ${params.model}.`);
+  }
+
   const promptText = params.messages
     .map((message) => `${message.role}: ${normalizeMessageContent(message.content)}`)
     .join("\n\n");

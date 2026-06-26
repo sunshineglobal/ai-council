@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { History, Play, Search, SlidersHorizontal } from "lucide-react";
+import { Bot, History, PanelLeft, Plus, Search, Send, Settings2, SlidersHorizontal, Sparkles, User, X } from "lucide-react";
 import { MarkdownBlock } from "@/components/markdown-block";
 import { RunTrace } from "@/components/run-trace";
 import { TokenBreakdown } from "@/components/token-breakdown";
+import { parseCouncilStreamBlock } from "@/lib/sse";
 import type { CouncilEvent, CouncilRunResult, ModelOption, TokenTotals, UsageEvent } from "@/lib/types";
 
 type ChatSummary = {
@@ -43,6 +44,7 @@ export function CouncilWorkspace({
   const [judgeModel, setJudgeModel] = useState("");
   const [modelFilter, setModelFilter] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [activePrompt, setActivePrompt] = useState("");
   const [researchEnabled, setResearchEnabled] = useState(false);
   const [saveHistory, setSaveHistory] = useState(defaultSaveHistory);
   const [debateDepth, setDebateDepth] = useState(2);
@@ -53,6 +55,8 @@ export function CouncilWorkspace({
   const [result, setResult] = useState<CouncilRunResult | null>(null);
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [thread, setThread] = useState<ThreadPayload | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     void loadModels();
@@ -60,9 +64,18 @@ export function CouncilWorkspace({
   }, []);
 
   useEffect(() => {
+    setResult(null);
+    setError("");
+    setStatusLog([]);
+    setUsageEvents([]);
+    setActivePrompt("");
+
     if (initialThreadId) {
       void loadThread(initialThreadId);
+      return;
     }
+
+    setThread(null);
   }, [initialThreadId]);
 
   const filteredModels = useMemo(() => {
@@ -70,6 +83,10 @@ export function CouncilWorkspace({
     if (!query) return models.slice(0, 80);
     return models.filter((model) => `${model.id} ${model.name}`.toLowerCase().includes(query)).slice(0, 80);
   }, [modelFilter, models]);
+
+  const activeTitle = thread?.thread.title || compactTitle(activePrompt || result?.prompt || prompt) || "AI Council";
+  const latestStatus = statusLog.at(-1);
+  const canSubmit = Boolean(prompt.trim() && selectedModels.length > 0 && judgeModel && !running);
 
   async function loadModels() {
     const response = await fetch("/api/models");
@@ -104,11 +121,14 @@ export function CouncilWorkspace({
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!prompt.trim() || selectedModels.length === 0 || !judgeModel) return;
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt || selectedModels.length === 0 || !judgeModel) return;
 
     setRunning(true);
     setError("");
     setResult(null);
+    setActivePrompt(trimmedPrompt);
+    setPrompt("");
     setUsageEvents([]);
     setStatusLog(["Starting council run."]);
 
@@ -117,7 +137,7 @@ export function CouncilWorkspace({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt,
+          prompt: trimmedPrompt,
           models: selectedModels,
           judgeModel,
           debateDepth,
@@ -128,11 +148,13 @@ export function CouncilWorkspace({
       });
 
       if (!response.ok || !response.body) {
-        const body = (await response.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? "Council request failed.");
+        throw new Error(await readResponseError(response));
       }
 
-      await readEventStream(response.body);
+      const finished = await readEventStream(response.body);
+      if (!finished) {
+        throw new Error("Council stream ended before a final result arrived. Check the Vercel runtime logs for the server error.");
+      }
       if (saveHistory) {
         await loadChats();
       }
@@ -147,23 +169,47 @@ export function CouncilWorkspace({
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let sawTerminalEvent = false;
 
     while (true) {
       const { value, done } = await reader.read();
-      if (done) break;
+      if (done) {
+        buffer += decoder.decode();
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       const blocks = buffer.split("\n\n");
       buffer = blocks.pop() ?? "";
 
       for (const block of blocks) {
-        const dataLine = block
-          .split("\n")
-          .find((line) => line.startsWith("data: "))
-          ?.slice(6);
-        if (!dataLine) continue;
-        const event = JSON.parse(dataLine) as CouncilEvent;
+        const event = parseCouncilStreamBlock(block);
+        if (!event) continue;
+        if (event.type === "complete" || event.type === "error") sawTerminalEvent = true;
         handleCouncilEvent(event);
       }
+    }
+
+    if (buffer.trim()) {
+      const event = parseCouncilStreamBlock(buffer);
+      if (event) {
+        if (event.type === "complete" || event.type === "error") sawTerminalEvent = true;
+        handleCouncilEvent(event);
+      }
+    }
+
+    return sawTerminalEvent;
+  }
+
+  async function readResponseError(response: Response) {
+    const text = await response.text().catch(() => "");
+    if (!text) return `Council request failed with status ${response.status}.`;
+
+    try {
+      const body = JSON.parse(text) as { error?: string };
+      return body.error ?? `Council request failed with status ${response.status}.`;
+    } catch {
+      const preview = text.replace(/\s+/g, " ").trim().slice(0, 180);
+      return preview || `Council request failed with status ${response.status}.`;
     }
   }
 
@@ -187,169 +233,293 @@ export function CouncilWorkspace({
   }
 
   return (
-    <main className="workspace">
-      <aside className="sidebar">
-        <div className="section-title">
+    <main className={`workspace ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
+      <aside className="sidebar" aria-label="Chat history">
+        <div className="sidebar-top">
+          <Link className="new-chat-button" href="/app">
+            <Plus size={16} />
+            New chat
+          </Link>
+          <button className="icon-button ghost" type="button" title="Hide sidebar" onClick={() => setSidebarOpen(false)}>
+            <PanelLeft size={18} />
+          </button>
+        </div>
+
+        <div className="section-title compact">
           <h2>Chats</h2>
-          <History size={16} />
+          <History size={15} />
         </div>
         <div className="chat-list">
-          {chats.length === 0 ? <p className="muted">Saved chats will appear here.</p> : null}
+          {chats.length === 0 ? <p className="muted small">Saved chats appear here.</p> : null}
           {chats.map((chat) => (
             <Link className="chat-link" href={`/app/chats/${chat.id}`} key={chat.id}>
               <strong>{chat.title}</strong>
-              <span>{new Date(chat.updated_at).toLocaleString()}</span>
+              <span>{formatDate(chat.updated_at)}</span>
             </Link>
           ))}
         </div>
       </aside>
 
-      <section className="main-pane">
-        <form className="composer" onSubmit={submit}>
-          <div className="section-title">
+      <section className="main-pane chat-pane">
+        <header className="chat-header">
+          <div className="chat-title-group">
+            {!sidebarOpen ? (
+              <button className="icon-button ghost" type="button" title="Show sidebar" onClick={() => setSidebarOpen(true)}>
+                <PanelLeft size={18} />
+              </button>
+            ) : null}
             <div>
-              <h2>New council prompt</h2>
-              <p className="muted">Models answer, debate, revise, and hand the result to a judge.</p>
-            </div>
-            <button className="button primary" disabled={running || !prompt.trim() || selectedModels.length === 0} type="submit">
-              <Play size={16} />
-              {running ? "Running" : "Run council"}
-            </button>
-          </div>
-          <textarea
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            placeholder="Ask the council..."
-          />
-          <div className="control-grid">
-            <label className="field">
-              <span>Judge model</span>
-              <select value={judgeModel} onChange={(event) => setJudgeModel(event.target.value)}>
-                {models.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Debate depth</span>
-              <select value={debateDepth} onChange={(event) => setDebateDepth(Number(event.target.value))}>
-                <option value={1}>1 round</option>
-                <option value={2}>2 rounds</option>
-                <option value={3}>3 rounds</option>
-                <option value={4}>4 rounds</option>
-              </select>
-            </label>
-            <div className="field">
-              <span>Run mode</span>
-              <label className="toggle-row">
-                <input
-                  checked={researchEnabled}
-                  type="checkbox"
-                  onChange={(event) => setResearchEnabled(event.target.checked)}
-                />
-                Firecrawl research
-              </label>
-              <label className="toggle-row">
-                <input checked={saveHistory} type="checkbox" onChange={(event) => setSaveHistory(event.target.checked)} />
-                Save history
-              </label>
+              <h1>{activeTitle}</h1>
+              <div className="pill-row">
+                <span className="pill">{selectedModels.length} models</span>
+                <span className="pill">{debateDepth} rounds</span>
+                {researchEnabled ? <span className="pill">Research</span> : null}
+              </div>
             </div>
           </div>
-        </form>
+          <button className="button subtle" type="button" onClick={() => setSettingsOpen(true)}>
+            <Settings2 size={16} />
+            Settings
+          </button>
+        </header>
 
-        <div className="run-area">
-          {error ? <div className="panel error-text">{error}</div> : null}
-          {statusLog.length ? (
-            <section className="panel">
-              <h2>Run status</h2>
+        <div className="conversation">
+          {!thread?.runs.length && !activePrompt && !result && !running && !error ? <EmptyState /> : null}
+          {thread ? <StoredThreadView thread={thread} /> : null}
+          {activePrompt ? (
+            <Message role="user">
+              <MarkdownBlock text={activePrompt} />
+            </Message>
+          ) : null}
+          {running || (statusLog.length > 0 && !result) ? (
+            <Message role="assistant" accent>
+              <div className="thinking-line">
+                <Sparkles size={16} />
+                <span>{latestStatus ?? "Working through it."}</span>
+              </div>
               <div className="status-log">
                 {statusLog.map((message, index) => (
                   <span key={`${message}-${index}`}>{message}</span>
                 ))}
               </div>
-            </section>
+              {usageEvents.length > 0 && !result ? <TokenBreakdown events={usageEvents} /> : null}
+            </Message>
           ) : null}
-          {usageEvents.length > 0 && !result ? <TokenBreakdown events={usageEvents} /> : null}
-          {result ? (
-            <>
-              <section className="panel">
-                <div className="section-title">
-                  <h2>Final answer</h2>
-                  <div className="pill-row">
-                    <span className="pill">{result.savedMode ? "saved" : "ephemeral"}</span>
-                    <span className="pill">{result.latencyMs}ms</span>
-                  </div>
-                </div>
-                <MarkdownBlock text={result.finalAnswer} />
-              </section>
-              <TokenBreakdown totals={result.tokenTotals} events={result.usageEvents} costEstimate={result.costEstimate} />
-              <RunTrace result={result} />
-            </>
+          {error ? (
+            <Message role="assistant" accent>
+              <div className="error-text">{error}</div>
+            </Message>
           ) : null}
-          {thread ? <StoredThreadView thread={thread} /> : null}
+          {result ? <ActiveResult result={result} /> : null}
         </div>
+
+        <form className="composer" onSubmit={submit}>
+          <textarea
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder="Ask the council..."
+            rows={1}
+          />
+          <div className="composer-footer">
+            <div className="composer-meta">
+              <span>{judgeModel ? modelLabel(models, judgeModel) : "Choose a judge"}</span>
+              <span>{saveHistory ? "Saved" : "Ephemeral"}</span>
+            </div>
+            <button className="send-button" disabled={!canSubmit} type="submit" title={running ? "Running" : "Send"}>
+              <Send size={17} />
+            </button>
+          </div>
+        </form>
       </section>
 
-      <aside className="settings-pane">
-        <div className="section-title">
-          <h2>Council models</h2>
-          <SlidersHorizontal size={16} />
+      <aside className={`settings-pane ${settingsOpen ? "open" : ""}`} aria-label="Council settings">
+        <div className="settings-header">
+          <div>
+            <h2>Council settings</h2>
+            <p className="muted">{selectedModels.length}/8 models selected</p>
+          </div>
+          <button className="icon-button ghost" type="button" title="Close settings" onClick={() => setSettingsOpen(false)}>
+            <X size={18} />
+          </button>
         </div>
-        <label className="field">
-          <span>Search models</span>
-          <span style={{ position: "relative" }}>
-            <Search aria-hidden size={16} style={{ left: 10, position: "absolute", top: 11 }} />
-            <input
-              value={modelFilter}
-              onChange={(event) => setModelFilter(event.target.value)}
-              placeholder="openai, claude, llama..."
-              style={{ paddingLeft: 34 }}
-            />
-          </span>
-        </label>
-        <p className="muted">{selectedModels.length}/8 selected</p>
-        <div className="model-list">
-          {filteredModels.map((model) => (
-            <label className="model-item" key={model.id}>
-              <input checked={selectedModels.includes(model.id)} type="checkbox" onChange={() => toggleModel(model.id)} />
-              <span>
-                <strong>{model.name}</strong>
-                <span>{model.id}</span>
-              </span>
+
+        <div className="settings-scroll">
+          <label className="field">
+            <span>Judge model</span>
+            <select value={judgeModel} onChange={(event) => setJudgeModel(event.target.value)}>
+              {models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field range-field">
+            <span>Debate depth</span>
+            <div className="range-row">
+              <input min={1} max={4} type="range" value={debateDepth} onChange={(event) => setDebateDepth(Number(event.target.value))} />
+              <strong>
+                {debateDepth} {debateDepth === 1 ? "round" : "rounds"}
+              </strong>
+            </div>
+          </label>
+
+          <div className="field">
+            <span>Run mode</span>
+            <label className="switch-row">
+              <input checked={researchEnabled} type="checkbox" onChange={(event) => setResearchEnabled(event.target.checked)} />
+              <span>Firecrawl research</span>
             </label>
-          ))}
+            <label className="switch-row">
+              <input checked={saveHistory} type="checkbox" onChange={(event) => setSaveHistory(event.target.checked)} />
+              <span>Save history</span>
+            </label>
+          </div>
+
+          <label className="field">
+            <span>Search models</span>
+            <span className="input-shell">
+              <Search aria-hidden size={16} />
+              <input
+                value={modelFilter}
+                onChange={(event) => setModelFilter(event.target.value)}
+                placeholder="openai, claude, llama..."
+              />
+            </span>
+          </label>
+
+          <div className="model-list">
+            {filteredModels.map((model) => (
+              <label className="model-item" key={model.id}>
+                <input checked={selectedModels.includes(model.id)} type="checkbox" onChange={() => toggleModel(model.id)} />
+                <span>
+                  <strong>{model.name}</strong>
+                  <span>{model.id}</span>
+                </span>
+              </label>
+            ))}
+          </div>
         </div>
       </aside>
+      {settingsOpen ? <button className="drawer-scrim" type="button" aria-label="Close settings" onClick={() => setSettingsOpen(false)} /> : null}
     </main>
+  );
+}
+
+function ActiveResult({ result }: { result: CouncilRunResult }) {
+  return (
+    <Message role="assistant">
+      <div className="answer-header">
+        <div className="assistant-name">
+          <Bot size={16} />
+          AI Council
+        </div>
+        <div className="pill-row">
+          <span className="pill">{result.savedMode ? "Saved" : "Ephemeral"}</span>
+          <span className="pill">{result.latencyMs}ms</span>
+        </div>
+      </div>
+      <MarkdownBlock text={result.finalAnswer} />
+      <details className="trace run-details">
+        <summary>
+          <span>
+            <SlidersHorizontal size={16} />
+            Run details
+          </span>
+          <span className="pill">{result.models.length} models</span>
+        </summary>
+        <div className="trace-body stack">
+          <TokenBreakdown totals={result.tokenTotals} events={result.usageEvents} costEstimate={result.costEstimate} />
+          <RunTrace result={result} />
+        </div>
+      </details>
+    </Message>
   );
 }
 
 function StoredThreadView({ thread }: { thread: ThreadPayload }) {
   return (
-    <section className="panel">
-      <h2>{thread.thread.title}</h2>
-      <div className="stack">
-        {thread.runs.map((run) => (
-          <details className="trace" key={run.id}>
-            <summary>
-              <span>{run.prompt_text || "Ephemeral prompt"}</span>
-              <span className="pill">{new Date(run.created_at).toLocaleString()}</span>
-            </summary>
-            <div className="trace-body stack">
-              <MarkdownBlock text={run.final_answer ?? undefined} empty="No saved final answer." />
-              <TokenBreakdown totals={run.token_totals} />
-              <div className="pill-row">
-                <span className="pill">{run.models.length} models</span>
-                <span className="pill">judge {run.judge_model}</span>
-                <span className="pill">{run.debate_depth} debate rounds</span>
-                {run.research_enabled ? <span className="pill">Firecrawl research</span> : null}
+    <div className="stored-thread" aria-label={thread.thread.title}>
+      {thread.runs.map((run) => (
+        <div className="turn-pair" key={run.id}>
+          <Message role="user">
+            <MarkdownBlock text={run.prompt_text ?? undefined} empty="Ephemeral prompt" />
+          </Message>
+          <Message role="assistant">
+            <div className="answer-header">
+              <div className="assistant-name">
+                <Bot size={16} />
+                AI Council
               </div>
+              <span className="pill">{formatDate(run.created_at)}</span>
             </div>
-          </details>
-        ))}
+            <MarkdownBlock text={run.final_answer ?? undefined} empty="No saved final answer." />
+            <details className="trace run-details">
+              <summary>
+                <span>
+                  <SlidersHorizontal size={16} />
+                  Run details
+                </span>
+                <span className="pill">{run.models.length} models</span>
+              </summary>
+              <div className="trace-body stack">
+                <TokenBreakdown totals={run.token_totals} />
+                <div className="pill-row">
+                  <span className="pill">judge {run.judge_model}</span>
+                  <span className="pill">
+                    {run.debate_depth} {run.debate_depth === 1 ? "round" : "rounds"}
+                  </span>
+                  {run.research_enabled ? <span className="pill">Firecrawl research</span> : null}
+                </div>
+              </div>
+            </details>
+          </Message>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Message({ role, accent = false, children }: { role: "user" | "assistant"; accent?: boolean; children: React.ReactNode }) {
+  const Icon = role === "user" ? User : Bot;
+
+  return (
+    <article className={`message-row ${role === "user" ? "message-row-user" : "message-row-assistant"} ${accent ? "accent" : ""}`}>
+      <div className="message-avatar" aria-hidden>
+        <Icon size={16} />
       </div>
+      <div className="message-content">{children}</div>
+    </article>
+  );
+}
+
+function EmptyState() {
+  return (
+    <section className="empty-state">
+      <div className="empty-mark">
+        <Sparkles size={22} />
+      </div>
+      <h2>What are we deciding?</h2>
     </section>
   );
+}
+
+function compactTitle(text: string) {
+  const trimmed = text.trim().replace(/\s+/g, " ");
+  if (!trimmed) return "";
+  return trimmed.length > 52 ? `${trimmed.slice(0, 49)}...` : trimmed;
+}
+
+function modelLabel(models: ModelOption[], modelId: string) {
+  return models.find((model) => model.id === modelId)?.name ?? modelId;
+}
+
+function formatDate(value: string) {
+  return new Date(value).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
 }

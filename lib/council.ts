@@ -1,7 +1,8 @@
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import { getErrorLog, getErrorMessage } from "@/lib/errors";
 import { compactText } from "@/lib/format";
 import { buildResearchContext, searchWithFirecrawl } from "@/lib/firecrawl";
-import { completeWithOpenRouter } from "@/lib/openrouter";
+import { completeWithOpenRouter, type CompletionResult } from "@/lib/openrouter";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { emptyUsage, estimateTokens, summarizeUsage } from "@/lib/token-usage";
 import type {
@@ -45,7 +46,10 @@ export async function runCouncil(input: CouncilRunInput, context: RunContext): P
       })
       .select("id")
       .single();
-    if (error) throw error;
+    assertSupabaseOk("creating chat thread", error);
+    if (!data?.id) {
+      throw new Error("Supabase data write failed while creating chat thread: no id was returned.");
+    }
     threadId = data.id as string;
   }
 
@@ -67,12 +71,14 @@ export async function runCouncil(input: CouncilRunInput, context: RunContext): P
     const initialResponses = await runInitialStage(input, researchContext, context, runId, usageEvents);
 
     if (!initialResponses.some((result) => result.status === "complete" && result.content.trim())) {
-      throw new Error("Every council model failed during the initial answer stage.");
+      const reasons = initialResponses.map((result) => `${result.modelId}: ${result.error ?? "empty response"}`).join("; ");
+      throw new Error(`Every council model failed during the initial answer stage. ${reasons}`);
     }
 
     const critiqueRounds: CritiqueResult[][] = [];
     for (let roundIndex = 1; roundIndex <= input.debateDepth; roundIndex += 1) {
-      await admin.from("debate_rounds").insert({ run_id: runId, round_index: roundIndex });
+      const { error } = await admin.from("debate_rounds").insert({ run_id: runId, round_index: roundIndex });
+      assertSupabaseOk(`creating debate round ${roundIndex}`, error);
       const round = await runCritiqueRound({
         input,
         researchContext,
@@ -132,7 +138,7 @@ export async function runCouncil(input: CouncilRunInput, context: RunContext): P
       createdAt: new Date().toISOString()
     };
 
-    await admin
+    const { error: updateError } = await admin
       .from("council_runs")
       .update({
         final_answer: input.saveHistory ? judge.synthesis : null,
@@ -143,16 +149,23 @@ export async function runCouncil(input: CouncilRunInput, context: RunContext): P
         updated_at: new Date().toISOString()
       })
       .eq("id", runId);
+    assertSupabaseOk("marking council run complete", updateError);
 
     if (threadId) {
-      await admin.from("chat_threads").update({ updated_at: new Date().toISOString() }).eq("id", threadId);
+      const { error } = await admin.from("chat_threads").update({ updated_at: new Date().toISOString() }).eq("id", threadId);
+      assertSupabaseOk("updating chat thread timestamp", error);
     }
 
     await emit(context, { type: "complete", result });
     return result;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Council run failed.";
-    await admin
+    const message = getErrorMessage(error, "Council run failed.");
+    console.error("[council] run failed", {
+      runId,
+      userId: context.userId,
+      ...getErrorLog(error)
+    });
+    const { error: updateError } = await admin
       .from("council_runs")
       .update({
         status: "failed",
@@ -160,6 +173,13 @@ export async function runCouncil(input: CouncilRunInput, context: RunContext): P
         updated_at: new Date().toISOString()
       })
       .eq("id", runId);
+    if (updateError) {
+      console.error("[council] could not mark run failed", {
+        runId,
+        userId: context.userId,
+        ...getErrorLog(updateError)
+      });
+    }
     await emit(context, { type: "error", message });
     throw error;
   }
@@ -196,7 +216,7 @@ async function insertRun(
     saved_mode: params.input.saveHistory,
     status: "running"
   });
-  if (error) throw error;
+  assertSupabaseOk("creating council run", error);
 }
 
 async function runResearchStage(
@@ -223,7 +243,7 @@ async function runResearchStage(
   await persistUsage(runId, context.userId, usage);
 
   const admin = createSupabaseAdminClient();
-  await admin.from("research_results").insert({
+  const { error } = await admin.from("research_results").insert({
     run_id: runId,
     user_id: context.userId,
     query: saveHistory ? research.query : null,
@@ -232,6 +252,7 @@ async function runResearchStage(
     firecrawl_credits: research.credits,
     saved_mode: saveHistory
   });
+  assertSupabaseOk("saving research results", error);
 
   await emit(context, { type: "research", research });
   await emit(context, { type: "usage", usage });
@@ -363,8 +384,8 @@ async function runJudgeStage(params: {
     { role: "user", content: promptText }
   ];
 
+  let completion: CompletionResult;
   try {
-    let completion;
     try {
       completion = await completeWithOpenRouter({
         model: params.input.judgeModel,
@@ -373,7 +394,12 @@ async function runJudgeStage(params: {
         maxTokens: 2200,
         responseFormat: "json_object"
       });
-    } catch {
+    } catch (error) {
+      console.warn("[council] judge JSON mode failed, retrying without response_format", {
+        runId: params.runId,
+        modelId: params.input.judgeModel,
+        ...getErrorLog(error)
+      });
       completion = await completeWithOpenRouter({
         model: params.input.judgeModel,
         messages,
@@ -382,33 +408,9 @@ async function runJudgeStage(params: {
       });
     }
 
-    const parsed = parseJudgeOutput(completion.content);
-    const synthesis = parsed.synthesis || completion.content;
-    const result: JudgeResult = {
-      id,
-      modelId: params.input.judgeModel,
-      synthesis,
-      rankings: parsed.rankings,
-      usage: completion.usage,
-      latencyMs: completion.latencyMs,
-      status: "complete"
-    };
-
-    await persistJudge(params.runId, params.input.saveHistory, result);
-    await recordUsage({
-      runId: params.runId,
-      userId: params.context.userId,
-      stage: "judge_synthesis",
-      modelId: params.input.judgeModel,
-      completion,
-      usageEvents: params.usageEvents,
-      context: params.context
-    });
-
-    return result;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Judge failed.";
-    const result: JudgeResult = {
+    const message = getErrorMessage(error, "Judge failed.");
+    const failedResult: JudgeResult = {
       id,
       modelId: params.input.judgeModel,
       synthesis: "The judge model failed before it could synthesize a final answer.",
@@ -418,9 +420,34 @@ async function runJudgeStage(params: {
       status: "error",
       error: message
     };
-    await persistJudge(params.runId, params.input.saveHistory, result);
-    return result;
+    await persistJudge(params.runId, params.input.saveHistory, failedResult);
+    return failedResult;
   }
+
+  const parsed = parseJudgeOutput(completion.content);
+  const synthesis = parsed.synthesis || completion.content;
+  const result: JudgeResult = {
+    id,
+    modelId: params.input.judgeModel,
+    synthesis,
+    rankings: parsed.rankings,
+    usage: completion.usage,
+    latencyMs: completion.latencyMs,
+    status: "complete"
+  };
+
+  await persistJudge(params.runId, params.input.saveHistory, result);
+  await recordUsage({
+    runId: params.runId,
+    userId: params.context.userId,
+    stage: "judge_synthesis",
+    modelId: params.input.judgeModel,
+    completion,
+    usageEvents: params.usageEvents,
+    context: params.context
+  });
+
+  return result;
 }
 
 async function callModelStage(params: {
@@ -434,35 +461,16 @@ async function callModelStage(params: {
   context: RunContext;
 }): Promise<StageResult> {
   const id = crypto.randomUUID();
+  let completion: CompletionResult;
   try {
-    const completion = await completeWithOpenRouter({
+    completion = await completeWithOpenRouter({
       model: params.modelId,
       messages: params.messages,
       temperature: params.stage === "initial_answer" ? 0.55 : 0.35,
       maxTokens: 1800
     });
-    const result: StageResult = {
-      id,
-      modelId: params.modelId,
-      stage: params.stage,
-      content: completion.content,
-      usage: completion.usage,
-      latencyMs: completion.latencyMs,
-      status: "complete"
-    };
-    await persistModelResponse(params.runId, params.saveHistory, result);
-    await recordUsage({
-      runId: params.runId,
-      userId: params.userId,
-      stage: params.stage,
-      modelId: params.modelId,
-      completion,
-      usageEvents: params.usageEvents,
-      context: params.context
-    });
-    return result;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Model call failed.";
+    const message = getErrorMessage(error, "Model call failed.");
     const result: StageResult = {
       id,
       modelId: params.modelId,
@@ -476,6 +484,27 @@ async function callModelStage(params: {
     await persistModelResponse(params.runId, params.saveHistory, result);
     return result;
   }
+
+  const result: StageResult = {
+    id,
+    modelId: params.modelId,
+    stage: params.stage,
+    content: completion.content,
+    usage: completion.usage,
+    latencyMs: completion.latencyMs,
+    status: "complete"
+  };
+  await persistModelResponse(params.runId, params.saveHistory, result);
+  await recordUsage({
+    runId: params.runId,
+    userId: params.userId,
+    stage: params.stage,
+    modelId: params.modelId,
+    completion,
+    usageEvents: params.usageEvents,
+    context: params.context
+  });
+  return result;
 }
 
 async function callCritiqueStage(params: {
@@ -489,35 +518,16 @@ async function callCritiqueStage(params: {
   context: RunContext;
 }): Promise<CritiqueResult> {
   const id = crypto.randomUUID();
+  let completion: CompletionResult;
   try {
-    const completion = await completeWithOpenRouter({
+    completion = await completeWithOpenRouter({
       model: params.modelId,
       messages: params.messages,
       temperature: 0.45,
       maxTokens: 1400
     });
-    const result: CritiqueResult = {
-      id,
-      roundIndex: params.roundIndex,
-      modelId: params.modelId,
-      content: completion.content,
-      usage: completion.usage,
-      latencyMs: completion.latencyMs,
-      status: "complete"
-    };
-    await persistCritique(params.runId, params.saveHistory, result);
-    await recordUsage({
-      runId: params.runId,
-      userId: params.userId,
-      stage: "debate_critique",
-      modelId: params.modelId,
-      completion,
-      usageEvents: params.usageEvents,
-      context: params.context
-    });
-    return result;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Critique call failed.";
+    const message = getErrorMessage(error, "Critique call failed.");
     const result: CritiqueResult = {
       id,
       roundIndex: params.roundIndex,
@@ -531,6 +541,27 @@ async function callCritiqueStage(params: {
     await persistCritique(params.runId, params.saveHistory, result);
     return result;
   }
+
+  const result: CritiqueResult = {
+    id,
+    roundIndex: params.roundIndex,
+    modelId: params.modelId,
+    content: completion.content,
+    usage: completion.usage,
+    latencyMs: completion.latencyMs,
+    status: "complete"
+  };
+  await persistCritique(params.runId, params.saveHistory, result);
+  await recordUsage({
+    runId: params.runId,
+    userId: params.userId,
+    stage: "debate_critique",
+    modelId: params.modelId,
+    completion,
+    usageEvents: params.usageEvents,
+    context: params.context
+  });
+  return result;
 }
 
 function buildInitialMessages(prompt: string, researchContext: string): ChatCompletionMessageParam[] {
@@ -702,7 +733,7 @@ function parseJudgeOutput(content: string): { synthesis: string; rankings: Judge
 
 async function persistModelResponse(runId: string, saveHistory: boolean, result: StageResult) {
   const admin = createSupabaseAdminClient();
-  await admin.from("model_responses").insert({
+  const { error } = await admin.from("model_responses").insert({
     id: result.id,
     run_id: runId,
     model_id: result.modelId,
@@ -713,11 +744,12 @@ async function persistModelResponse(runId: string, saveHistory: boolean, result:
     status: result.status,
     error: result.error ?? null
   });
+  assertSupabaseOk("saving model response", error);
 }
 
 async function persistCritique(runId: string, saveHistory: boolean, result: CritiqueResult) {
   const admin = createSupabaseAdminClient();
-  await admin.from("model_critiques").insert({
+  const { error } = await admin.from("model_critiques").insert({
     id: result.id,
     run_id: runId,
     round_index: result.roundIndex,
@@ -728,11 +760,12 @@ async function persistCritique(runId: string, saveHistory: boolean, result: Crit
     status: result.status,
     error: result.error ?? null
   });
+  assertSupabaseOk("saving model critique", error);
 }
 
 async function persistJudge(runId: string, saveHistory: boolean, result: JudgeResult) {
   const admin = createSupabaseAdminClient();
-  await admin.from("judge_rankings").insert({
+  const { error } = await admin.from("judge_rankings").insert({
     id: result.id,
     run_id: runId,
     judge_model: result.modelId,
@@ -743,6 +776,7 @@ async function persistJudge(runId: string, saveHistory: boolean, result: JudgeRe
     status: result.status,
     error: result.error ?? null
   });
+  assertSupabaseOk("saving judge result", error);
 }
 
 async function recordUsage(params: {
@@ -772,7 +806,7 @@ async function recordUsage(params: {
 
 async function persistUsage(runId: string, userId: string, usage: UsageEvent) {
   const admin = createSupabaseAdminClient();
-  await admin.from("usage_events").insert({
+  const { error } = await admin.from("usage_events").insert({
     user_id: userId,
     run_id: runId,
     stage: usage.stage,
@@ -785,8 +819,14 @@ async function persistUsage(runId: string, userId: string, usage: UsageEvent) {
     estimated_cost: usage.estimatedCost,
     metadata: { estimated: usage.estimated ?? false }
   });
+  assertSupabaseOk("saving token usage", error);
 }
 
 async function emit(context: RunContext, event: CouncilEvent) {
   await context.onEvent?.(event);
+}
+
+function assertSupabaseOk(action: string, error: unknown) {
+  if (!error) return;
+  throw new Error(`Supabase data write failed while ${action}: ${getErrorMessage(error)}`);
 }

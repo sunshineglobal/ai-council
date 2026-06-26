@@ -73,28 +73,80 @@ export async function ensureProfile(user: User): Promise<AuthProfile> {
   }
 
   const admin = createSupabaseAdminClient();
+  const { data: existingProfile, error: existingError } = await admin
+    .from("profiles")
+    .select("id,email,role,default_save_history")
+    .eq("email", email)
+    .maybeSingle();
+
+  if (existingError) throw existingError;
+
+  if (existingProfile) {
+    const role = invite.role;
+
+    if (existingProfile.id === user.id) {
+      const { data, error } = await admin
+        .from("profiles")
+        .update({ role, updated_at: new Date().toISOString() })
+        .eq("id", user.id)
+        .select("id,email,role,default_save_history")
+        .single();
+
+      if (error) throw error;
+      await markInviteAccepted(email);
+      return data as AuthProfile;
+    }
+
+    const { data, error } = await admin
+      .from("profiles")
+      .update({ id: user.id, role, updated_at: new Date().toISOString() })
+      .eq("email", email)
+      .select("id,email,role,default_save_history")
+      .single();
+
+    if (!error) {
+      await markInviteAccepted(email);
+      return data as AuthProfile;
+    }
+
+    const { data: fallbackData, error: fallbackError } = await admin
+      .from("profiles")
+      .update({ role, updated_at: new Date().toISOString() })
+      .eq("email", email)
+      .select("id,email,role,default_save_history")
+      .single();
+
+    if (fallbackError) throw fallbackError;
+    await markInviteAccepted(email);
+    return fallbackData as AuthProfile;
+  }
+
   const { data, error } = await admin
     .from("profiles")
-    .upsert(
+    .insert(
       {
         id: user.id,
         email,
         role: invite.role
-      },
-      { onConflict: "id" }
+      }
     )
     .select("id,email,role,default_save_history")
     .single();
 
   if (error) throw error;
 
+  await markInviteAccepted(email);
+
+  return data as AuthProfile;
+}
+
+async function markInviteAccepted(email: string) {
+  const admin = createSupabaseAdminClient();
   await admin
     .from("invites")
     .update({ accepted_at: new Date().toISOString() })
     .eq("email", email)
     .is("accepted_at", null);
-
-  return data as AuthProfile;
 }
 
 export async function getCurrentProfile(): Promise<AuthProfile | null> {
