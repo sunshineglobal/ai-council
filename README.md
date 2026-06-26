@@ -1,12 +1,22 @@
 # AI Council
 
-A private, invite-only AI council app. It uses Supabase for authentication and data, OpenRouter's OpenAI-compatible API for LLM calls, and Firecrawl for optional web research.
+A private, invite-only AI council app. It uses Supabase for authentication and data, OpenRouter's OpenAI-compatible API for LLM calls, and OpenRouter web search with the Firecrawl engine for optional web research.
+
+## Features
+
+- Invite-only Supabase auth with admin invites.
+- Saved and ephemeral council chats.
+- Up to 8 model council members with a separate judge model.
+- Optional Firecrawl-backed web research through OpenRouter.
+- File attachments in chat: upload up to 5 private files per run, with text extraction for text-like formats such as Markdown, CSV, JSON, SQL, logs, and source files.
+- Usage and cost tracking with admin budget controls.
+- Evals for comparing council configurations.
 
 ## Local Setup
 
 1. Install Node.js 20+.
 2. Copy `.env.example` to `.env.local` and fill in the keys.
-3. Create a Supabase project and run `supabase/migrations/0001_ai_council.sql`.
+3. Create a Supabase project and run the SQL migrations in `supabase/migrations` in filename order.
 4. Install dependencies and run the app:
 
 ```bash
@@ -22,7 +32,9 @@ After editing `.env.local`, restart `npm run dev`.
 ## Required Services
 
 - `OPENROUTER_API_KEY` is used only on the server.
-- `FIRECRAWL_API_KEY` is used only on the server.
+- File uploads use the private Supabase Storage bucket created by `supabase/migrations/0003_file_attachments.sql`.
+- Optional web research uses OpenRouter's `web` plugin with `engine: "firecrawl"`. Enable Firecrawl in OpenRouter plugin settings before using research mode.
+- `OPENROUTER_RESEARCH_MODEL` can override the default lightweight research model.
 - `INITIAL_ADMIN_EMAIL` gets admin access even before an invite exists.
 
 ## Verification

@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+const MAX_ATTACHMENT_COUNT = 5;
+
 export const councilRunSchema = z.object({
   prompt: z.string().min(1).max(12000),
   models: z.array(z.string().min(1)).min(1).max(8),
@@ -7,7 +9,8 @@ export const councilRunSchema = z.object({
   debateDepth: z.number().int().min(1).max(4),
   researchEnabled: z.boolean(),
   saveHistory: z.boolean(),
-  threadId: z.string().uuid().optional()
+  threadId: z.string().uuid().optional(),
+  attachmentIds: z.array(z.string().uuid()).max(MAX_ATTACHMENT_COUNT).optional()
 });
 
 export const researchSchema = z.object({
@@ -18,6 +21,10 @@ export const researchSchema = z.object({
 export const inviteSchema = z.object({
   email: z.string().email(),
   role: z.enum(["admin", "member"]).default("member")
+});
+
+export const adminUsageBudgetSchema = z.object({
+  monthlyBudgetUsd: z.number().finite().min(0).max(999999.999999).nullable()
 });
 
 export const evalRunSchema = z.object({

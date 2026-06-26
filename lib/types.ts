@@ -48,6 +48,18 @@ export type ResearchResult = {
   estimatedContextTokens: number;
 };
 
+export type CouncilAttachment = {
+  id: string;
+  filename: string;
+  contentType: string;
+  fileSize: number;
+  textPreview?: string;
+  extractedText?: string;
+  extractionStatus: "ready" | "unsupported" | "too_large" | "failed" | "none";
+  extractionError?: string;
+  createdAt: string;
+};
+
 export type StageResult = {
   id: string;
   modelId: string;
@@ -103,6 +115,7 @@ export type CouncilRunResult = {
   debateDepth: number;
   researchEnabled: boolean;
   savedMode: boolean;
+  attachments: CouncilAttachment[];
   research?: ResearchResult;
   initialResponses: StageResult[];
   critiqueRounds: CritiqueResult[][];
@@ -123,6 +136,7 @@ export type CouncilRunInput = {
   researchEnabled: boolean;
   saveHistory: boolean;
   threadId?: string;
+  attachmentIds?: string[];
 };
 
 export type AuthProfile = {
@@ -130,6 +144,7 @@ export type AuthProfile = {
   email: string;
   role: UserRole;
   default_save_history: boolean;
+  monthly_budget_usd: number | null;
 };
 
 export type CouncilEvent =

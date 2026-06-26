@@ -75,7 +75,7 @@ export async function ensureProfile(user: User): Promise<AuthProfile> {
   const admin = createSupabaseAdminClient();
   const { data: existingProfile, error: existingError } = await admin
     .from("profiles")
-    .select("id,email,role,default_save_history")
+    .select("id,email,role,default_save_history,monthly_budget_usd")
     .eq("email", email)
     .maybeSingle();
 
@@ -89,7 +89,7 @@ export async function ensureProfile(user: User): Promise<AuthProfile> {
         .from("profiles")
         .update({ role, updated_at: new Date().toISOString() })
         .eq("id", user.id)
-        .select("id,email,role,default_save_history")
+        .select("id,email,role,default_save_history,monthly_budget_usd")
         .single();
 
       if (error) throw error;
@@ -101,7 +101,7 @@ export async function ensureProfile(user: User): Promise<AuthProfile> {
       .from("profiles")
       .update({ id: user.id, role, updated_at: new Date().toISOString() })
       .eq("email", email)
-      .select("id,email,role,default_save_history")
+      .select("id,email,role,default_save_history,monthly_budget_usd")
       .single();
 
     if (!error) {
@@ -113,7 +113,7 @@ export async function ensureProfile(user: User): Promise<AuthProfile> {
       .from("profiles")
       .update({ role, updated_at: new Date().toISOString() })
       .eq("email", email)
-      .select("id,email,role,default_save_history")
+      .select("id,email,role,default_save_history,monthly_budget_usd")
       .single();
 
     if (fallbackError) throw fallbackError;
@@ -130,7 +130,7 @@ export async function ensureProfile(user: User): Promise<AuthProfile> {
         role: invite.role
       }
     )
-    .select("id,email,role,default_save_history")
+    .select("id,email,role,default_save_history,monthly_budget_usd")
     .single();
 
   if (error) throw error;

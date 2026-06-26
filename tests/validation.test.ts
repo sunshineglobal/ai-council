@@ -10,7 +10,8 @@ describe("council run validation", () => {
         judgeModel: "judge",
         debateDepth: 2,
         researchEnabled: true,
-        saveHistory: false
+        saveHistory: false,
+        attachmentIds: ["00000000-0000-4000-8000-000000000001"]
       })
     ).not.toThrow();
   });
@@ -24,6 +25,39 @@ describe("council run validation", () => {
         debateDepth: 5,
         researchEnabled: false,
         saveHistory: true
+      })
+    ).toThrow();
+  });
+
+  it("rejects invalid attachment ids and too many attachments", () => {
+    expect(() =>
+      councilRunSchema.parse({
+        prompt: "Hello",
+        models: ["model-a"],
+        judgeModel: "judge",
+        debateDepth: 1,
+        researchEnabled: false,
+        saveHistory: true,
+        attachmentIds: ["not-a-uuid"]
+      })
+    ).toThrow();
+
+    expect(() =>
+      councilRunSchema.parse({
+        prompt: "Hello",
+        models: ["model-a"],
+        judgeModel: "judge",
+        debateDepth: 1,
+        researchEnabled: false,
+        saveHistory: true,
+        attachmentIds: [
+          "00000000-0000-4000-8000-000000000001",
+          "00000000-0000-4000-8000-000000000002",
+          "00000000-0000-4000-8000-000000000003",
+          "00000000-0000-4000-8000-000000000004",
+          "00000000-0000-4000-8000-000000000005",
+          "00000000-0000-4000-8000-000000000006"
+        ]
       })
     ).toThrow();
   });

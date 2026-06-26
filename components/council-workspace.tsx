@@ -1,13 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { Bot, History, PanelLeft, Plus, Search, Send, Settings2, SlidersHorizontal, Sparkles, User, X } from "lucide-react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { Bot, FileText, History, Loader2, PanelLeft, Paperclip, Plus, Search, Send, Settings2, SlidersHorizontal, Sparkles, User, X } from "lucide-react";
 import { MarkdownBlock } from "@/components/markdown-block";
 import { RunTrace } from "@/components/run-trace";
 import { TokenBreakdown } from "@/components/token-breakdown";
 import { parseCouncilStreamBlock } from "@/lib/sse";
-import type { CouncilEvent, CouncilRunResult, ModelOption, TokenTotals, UsageEvent } from "@/lib/types";
+import type { CouncilAttachment, CouncilEvent, CouncilRunResult, ModelOption, TokenTotals, UsageEvent } from "@/lib/types";
 
 type ChatSummary = {
   id: string;
@@ -25,12 +25,53 @@ type StoredRun = {
   judge_model: string;
   debate_depth: number;
   research_enabled: boolean;
+  attachments?: StoredAttachment[];
 };
 
 type ThreadPayload = {
   thread: { id: string; title: string };
   runs: StoredRun[];
 };
+
+type StoredAttachment = {
+  id: string;
+  filename: string;
+  content_type?: string | null;
+  contentType?: string;
+  file_size?: number;
+  fileSize?: number;
+  text_preview?: string | null;
+  textPreview?: string;
+  extraction_status?: CouncilAttachment["extractionStatus"];
+  extractionStatus?: CouncilAttachment["extractionStatus"];
+  created_at?: string;
+  createdAt?: string;
+};
+
+const MAX_ATTACHMENTS = 5;
+const FILE_ACCEPT = [
+  ".txt",
+  ".md",
+  ".markdown",
+  ".csv",
+  ".tsv",
+  ".json",
+  ".jsonl",
+  ".yaml",
+  ".yml",
+  ".xml",
+  ".html",
+  ".css",
+  ".js",
+  ".jsx",
+  ".ts",
+  ".tsx",
+  ".py",
+  ".sql",
+  ".log",
+  "text/*",
+  "application/json"
+].join(",");
 
 export function CouncilWorkspace({
   defaultSaveHistory,
@@ -53,10 +94,17 @@ export function CouncilWorkspace({
   const [statusLog, setStatusLog] = useState<string[]>([]);
   const [usageEvents, setUsageEvents] = useState<UsageEvent[]>([]);
   const [result, setResult] = useState<CouncilRunResult | null>(null);
+  const [attachments, setAttachments] = useState<CouncilAttachment[]>([]);
+  const [activeAttachments, setActiveAttachments] = useState<CouncilAttachment[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [thread, setThread] = useState<ThreadPayload | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const deferredModelFilter = useDeferredValue(modelFilter);
 
   useEffect(() => {
     void loadModels();
@@ -69,6 +117,8 @@ export function CouncilWorkspace({
     setStatusLog([]);
     setUsageEvents([]);
     setActivePrompt("");
+    setActiveAttachments([]);
+    setUploadError("");
 
     if (initialThreadId) {
       void loadThread(initialThreadId);
@@ -78,15 +128,28 @@ export function CouncilWorkspace({
     setThread(null);
   }, [initialThreadId]);
 
+  useEffect(() => {
+    const textarea = promptRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = "0px";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 190)}px`;
+  }, [prompt]);
+
   const filteredModels = useMemo(() => {
-    const query = modelFilter.trim().toLowerCase();
+    const query = deferredModelFilter.trim().toLowerCase();
     if (!query) return models.slice(0, 80);
     return models.filter((model) => `${model.id} ${model.name}`.toLowerCase().includes(query)).slice(0, 80);
-  }, [modelFilter, models]);
+  }, [deferredModelFilter, models]);
 
   const activeTitle = thread?.thread.title || compactTitle(activePrompt || result?.prompt || prompt) || "AI Council";
   const latestStatus = statusLog.at(-1);
-  const canSubmit = Boolean(prompt.trim() && selectedModels.length > 0 && judgeModel && !running);
+  const canSubmit = Boolean(prompt.trim() && selectedModels.length > 0 && judgeModel && !running && !uploading);
+  const canAttachMore = attachments.length < MAX_ATTACHMENTS && !running && !uploading;
+  const selectedModelLabels = useMemo(
+    () => selectedModels.map((modelId) => ({ id: modelId, label: modelLabel(models, modelId) })),
+    [models, selectedModels]
+  );
 
   async function loadModels() {
     const response = await fetch("/api/models");
@@ -119,16 +182,72 @@ export function CouncilWorkspace({
     });
   }
 
+  async function uploadFiles(event: React.ChangeEvent<HTMLInputElement>) {
+    const selectedFiles = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (!selectedFiles.length) return;
+
+    if (attachments.length + selectedFiles.length > MAX_ATTACHMENTS) {
+      setUploadError(`Attach at most ${MAX_ATTACHMENTS} files.`);
+      return;
+    }
+
+    setUploading(true);
+    setUploadError("");
+
+    const formData = new FormData();
+    selectedFiles.forEach((file) => formData.append("files", file));
+    formData.append("saveHistory", String(saveHistory));
+
+    try {
+      const response = await fetch("/api/files", {
+        method: "POST",
+        body: formData
+      });
+
+      if (!response.ok) {
+        throw new Error(await readResponseError(response));
+      }
+
+      const body = (await response.json()) as { files: CouncilAttachment[] };
+      setAttachments((current) => [...current, ...body.files].slice(0, MAX_ATTACHMENTS));
+    } catch (fileError) {
+      setUploadError(fileError instanceof Error ? fileError.message : "File upload failed.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function removeAttachment(fileId: string) {
+    const removed = attachments.find((attachment) => attachment.id === fileId);
+    setAttachments((current) => current.filter((attachment) => attachment.id !== fileId));
+    setUploadError("");
+
+    try {
+      const response = await fetch(`/api/files/${fileId}`, { method: "DELETE" });
+      if (!response.ok) {
+        throw new Error(await readResponseError(response));
+      }
+    } catch (fileError) {
+      if (removed) setAttachments((current) => [...current, removed]);
+      setUploadError(fileError instanceof Error ? fileError.message : "Could not remove file.");
+    }
+  }
+
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmedPrompt = prompt.trim();
     if (!trimmedPrompt || selectedModels.length === 0 || !judgeModel) return;
+    const queuedAttachments = attachments;
 
     setRunning(true);
     setError("");
     setResult(null);
     setActivePrompt(trimmedPrompt);
+    setActiveAttachments(queuedAttachments);
+    setUploadError("");
     setPrompt("");
+    window.requestAnimationFrame(() => promptRef.current?.focus());
     setUsageEvents([]);
     setStatusLog(["Starting council run."]);
 
@@ -143,7 +262,8 @@ export function CouncilWorkspace({
           debateDepth,
           researchEnabled,
           saveHistory,
-          threadId: saveHistory ? initialThreadId : undefined
+          threadId: saveHistory ? initialThreadId : undefined,
+          attachmentIds: queuedAttachments.map((attachment) => attachment.id)
         })
       });
 
@@ -151,6 +271,7 @@ export function CouncilWorkspace({
         throw new Error(await readResponseError(response));
       }
 
+      setAttachments([]);
       const finished = await readEventStream(response.body);
       if (!finished) {
         throw new Error("Council stream ended before a final result arrived. Check the Vercel runtime logs for the server error.");
@@ -236,7 +357,7 @@ export function CouncilWorkspace({
     <main className={`workspace ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
       <aside className="sidebar" aria-label="Chat history">
         <div className="sidebar-top">
-          <Link className="new-chat-button" href="/app">
+          <Link className="new-chat-button" href="/app" prefetch={false}>
             <Plus size={16} />
             New chat
           </Link>
@@ -252,7 +373,13 @@ export function CouncilWorkspace({
         <div className="chat-list">
           {chats.length === 0 ? <p className="muted small">Saved chats appear here.</p> : null}
           {chats.map((chat) => (
-            <Link className="chat-link" href={`/app/chats/${chat.id}`} key={chat.id}>
+            <Link
+              aria-current={initialThreadId === chat.id ? "page" : undefined}
+              className={`chat-link ${initialThreadId === chat.id ? "active" : ""}`}
+              href={`/app/chats/${chat.id}`}
+              key={chat.id}
+              prefetch={false}
+            >
               <strong>{chat.title}</strong>
               <span>{formatDate(chat.updated_at)}</span>
             </Link>
@@ -284,11 +411,17 @@ export function CouncilWorkspace({
         </header>
 
         <div className="conversation">
-          {!thread?.runs.length && !activePrompt && !result && !running && !error ? <EmptyState /> : null}
+          {!thread?.runs.length && !activePrompt && !result && !running && !error ? (
+            <EmptyState onPickPrompt={(suggestion) => {
+              setPrompt(suggestion);
+              window.requestAnimationFrame(() => promptRef.current?.focus());
+            }} />
+          ) : null}
           {thread ? <StoredThreadView thread={thread} /> : null}
           {activePrompt ? (
             <Message role="user">
               <MarkdownBlock text={activePrompt} />
+              {activeAttachments.length ? <AttachmentList attachments={activeAttachments} /> : null}
             </Message>
           ) : null}
           {running || (statusLog.length > 0 && !result) ? (
@@ -314,20 +447,56 @@ export function CouncilWorkspace({
         </div>
 
         <form className="composer" onSubmit={submit}>
+          {attachments.length || uploadError ? (
+            <div className="composer-attachments">
+              {attachments.length ? (
+                <AttachmentList attachments={attachments} onRemove={(fileId) => void removeAttachment(fileId)} />
+              ) : null}
+              {uploadError ? <div className="error-text small">{uploadError}</div> : null}
+            </div>
+          ) : null}
           <textarea
+            ref={promptRef}
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
             placeholder="Ask the council..."
             rows={1}
+          />
+          <input
+            ref={fileInputRef}
+            className="sr-only"
+            type="file"
+            multiple
+            accept={FILE_ACCEPT}
+            onChange={(event) => void uploadFiles(event)}
           />
           <div className="composer-footer">
             <div className="composer-meta">
               <span>{judgeModel ? modelLabel(models, judgeModel) : "Choose a judge"}</span>
               <span>{saveHistory ? "Saved" : "Ephemeral"}</span>
+              {attachments.length ? <span>{attachments.length} attached</span> : null}
+              {uploading ? <span>Uploading</span> : null}
             </div>
-            <button className="send-button" disabled={!canSubmit} type="submit" title={running ? "Running" : "Send"}>
-              <Send size={17} />
-            </button>
+            <div className="composer-actions">
+              <button
+                className="icon-button ghost composer-icon-button"
+                disabled={!canAttachMore}
+                type="button"
+                title={uploading ? "Uploading" : "Attach files"}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {uploading ? <Loader2 className="spin" size={17} /> : <Paperclip size={17} />}
+              </button>
+              <button className="send-button" disabled={!canSubmit} type="submit" title={running ? "Running" : "Send"}>
+                <Send size={17} />
+              </button>
+            </div>
           </div>
         </form>
       </section>
@@ -354,6 +523,19 @@ export function CouncilWorkspace({
               ))}
             </select>
           </label>
+
+          {selectedModelLabels.length ? (
+            <div className="selected-model-strip" aria-label="Selected council models">
+              {selectedModelLabels.map((model) => (
+                <button className="selected-model-chip" key={model.id} type="button" onClick={() => toggleModel(model.id)}>
+                  <span>{model.label}</span>
+                  <X size={13} />
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="muted small">Choose at least one model.</p>
+          )}
 
           <label className="field range-field">
             <span>Debate depth</span>
@@ -445,6 +627,7 @@ function StoredThreadView({ thread }: { thread: ThreadPayload }) {
         <div className="turn-pair" key={run.id}>
           <Message role="user">
             <MarkdownBlock text={run.prompt_text ?? undefined} empty="Ephemeral prompt" />
+            {run.attachments?.length ? <AttachmentList attachments={run.attachments.map(normalizeStoredAttachment)} /> : null}
           </Message>
           <Message role="assistant">
             <div className="answer-header">
@@ -481,6 +664,43 @@ function StoredThreadView({ thread }: { thread: ThreadPayload }) {
   );
 }
 
+function AttachmentList({
+  attachments,
+  onRemove
+}: {
+  attachments: CouncilAttachment[];
+  onRemove?: (fileId: string) => void;
+}) {
+  return (
+    <div className="attachment-list" aria-label="Attached files">
+      {attachments.map((attachment) => (
+        <div className="attachment-item" key={attachment.id}>
+          <FileText size={15} />
+          <span className="attachment-copy">
+            <strong>{attachment.filename}</strong>
+            <span>
+              {formatBytes(attachment.fileSize)}
+              {attachment.extractionStatus === "ready" || attachment.extractionStatus === "too_large"
+                ? " text"
+                : ` ${attachment.extractionStatus}`}
+            </span>
+          </span>
+          {onRemove ? (
+            <button
+              className="icon-button ghost attachment-remove"
+              type="button"
+              title={`Remove ${attachment.filename}`}
+              onClick={() => onRemove(attachment.id)}
+            >
+              <X size={14} />
+            </button>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Message({ role, accent = false, children }: { role: "user" | "assistant"; accent?: boolean; children: React.ReactNode }) {
   const Icon = role === "user" ? User : Bot;
 
@@ -494,13 +714,27 @@ function Message({ role, accent = false, children }: { role: "user" | "assistant
   );
 }
 
-function EmptyState() {
+const PROMPT_SUGGESTIONS = [
+  "Stress-test this product idea from investor, user, and engineer perspectives.",
+  "Compare three approaches and pick the most practical one.",
+  "Find hidden risks in this plan and rewrite it into a stronger version.",
+  "Turn this messy question into a crisp decision memo."
+];
+
+function EmptyState({ onPickPrompt }: { onPickPrompt: (prompt: string) => void }) {
   return (
     <section className="empty-state">
       <div className="empty-mark">
         <Sparkles size={22} />
       </div>
       <h2>What are we deciding?</h2>
+      <div className="quick-prompts">
+        {PROMPT_SUGGESTIONS.map((suggestion) => (
+          <button className="suggestion-button" key={suggestion} type="button" onClick={() => onPickPrompt(suggestion)}>
+            {suggestion}
+          </button>
+        ))}
+      </div>
     </section>
   );
 }
@@ -513,6 +747,24 @@ function compactTitle(text: string) {
 
 function modelLabel(models: ModelOption[], modelId: string) {
   return models.find((model) => model.id === modelId)?.name ?? modelId;
+}
+
+function normalizeStoredAttachment(attachment: StoredAttachment): CouncilAttachment {
+  return {
+    id: attachment.id,
+    filename: attachment.filename,
+    contentType: attachment.contentType ?? attachment.content_type ?? "application/octet-stream",
+    fileSize: Number(attachment.fileSize ?? attachment.file_size ?? 0),
+    textPreview: attachment.textPreview ?? attachment.text_preview ?? undefined,
+    extractionStatus: attachment.extractionStatus ?? attachment.extraction_status ?? "none",
+    createdAt: attachment.createdAt ?? attachment.created_at ?? ""
+  };
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
 function formatDate(value: string) {

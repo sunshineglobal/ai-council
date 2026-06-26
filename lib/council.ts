@@ -1,11 +1,14 @@
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import { buildAttachmentContext, cleanupEphemeralAttachments, loadUserAttachments, persistRunAttachments } from "@/lib/attachments";
 import { getErrorLog, getErrorMessage } from "@/lib/errors";
 import { compactText } from "@/lib/format";
 import { buildResearchContext, searchWithFirecrawl } from "@/lib/firecrawl";
-import { completeWithOpenRouter, type CompletionResult } from "@/lib/openrouter";
+import { completeWithOpenRouter, fetchOpenRouterModels, type CompletionResult } from "@/lib/openrouter";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
-import { emptyUsage, estimateTokens, summarizeUsage } from "@/lib/token-usage";
+import { emptyUsage, summarizeUsage } from "@/lib/token-usage";
+import { buildUsageEvent, persistUsageEvent, pricingMapFromModels, type ModelPricingMap } from "@/lib/usage";
 import type {
+  CouncilAttachment,
   CouncilEvent,
   CouncilRunInput,
   CouncilRunResult,
@@ -34,6 +37,9 @@ export async function runCouncil(input: CouncilRunInput, context: RunContext): P
   const runId = crypto.randomUUID();
   const started = Date.now();
   const usageEvents: UsageEvent[] = [];
+  const pricingByModel = await loadPricingByModel();
+  const attachments = await loadUserAttachments(admin, context.userId, input.attachmentIds ?? []);
+  const attachmentContext = buildAttachmentContext(attachments);
   let threadId = input.saveHistory ? input.threadId : undefined;
 
   if (input.saveHistory && !threadId) {
@@ -60,7 +66,23 @@ export async function runCouncil(input: CouncilRunInput, context: RunContext): P
     input
   });
 
+  if (input.saveHistory) {
+    await persistRunAttachments({
+      admin,
+      runId,
+      userId: context.userId,
+      attachments
+    });
+  }
+
   await emit(context, { type: "started", runId });
+  if (attachments.length) {
+    await emit(context, {
+      type: "stage",
+      stage: "initial_answer",
+      message: `Loaded ${attachments.length} attached ${attachments.length === 1 ? "file" : "files"}.`
+    });
+  }
 
   try {
     const research = input.researchEnabled
@@ -68,7 +90,7 @@ export async function runCouncil(input: CouncilRunInput, context: RunContext): P
       : undefined;
 
     const researchContext = buildResearchContext(research);
-    const initialResponses = await runInitialStage(input, researchContext, context, runId, usageEvents);
+    const initialResponses = await runInitialStage(input, researchContext, attachmentContext, context, runId, usageEvents, pricingByModel);
 
     if (!initialResponses.some((result) => result.status === "complete" && result.content.trim())) {
       const reasons = initialResponses.map((result) => `${result.modelId}: ${result.error ?? "empty response"}`).join("; ");
@@ -82,12 +104,14 @@ export async function runCouncil(input: CouncilRunInput, context: RunContext): P
       const round = await runCritiqueRound({
         input,
         researchContext,
+        attachmentContext,
         initialResponses,
         previousRounds: critiqueRounds,
         roundIndex,
         context,
         runId,
-        usageEvents
+        usageEvents,
+        pricingByModel
       });
       critiqueRounds.push(round);
     }
@@ -95,22 +119,26 @@ export async function runCouncil(input: CouncilRunInput, context: RunContext): P
     const revisions = await runRevisionStage({
       input,
       researchContext,
+      attachmentContext,
       initialResponses,
       critiqueRounds,
       context,
       runId,
-      usageEvents
+      usageEvents,
+      pricingByModel
     });
 
     const judge = await runJudgeStage({
       input,
       research,
+      attachmentContext,
       initialResponses,
       critiqueRounds,
       revisions,
       context,
       runId,
-      usageEvents
+      usageEvents,
+      pricingByModel
     });
 
     const latencyMs = Date.now() - started;
@@ -126,6 +154,7 @@ export async function runCouncil(input: CouncilRunInput, context: RunContext): P
       debateDepth: input.debateDepth,
       researchEnabled: input.researchEnabled,
       savedMode: input.saveHistory,
+      attachments: attachments.map(redactAttachmentText),
       research,
       initialResponses,
       critiqueRounds,
@@ -182,6 +211,14 @@ export async function runCouncil(input: CouncilRunInput, context: RunContext): P
     }
     await emit(context, { type: "error", message });
     throw error;
+  } finally {
+    if (!input.saveHistory && attachments.length) {
+      await cleanupEphemeralAttachments({
+        admin,
+        userId: context.userId,
+        attachmentIds: attachments.map((attachment) => attachment.id)
+      });
+    }
   }
 }
 
@@ -190,6 +227,7 @@ function validateInput(input: CouncilRunInput) {
   if (input.models.length < 1) throw new Error("Choose at least one council model.");
   if (input.models.length > MAX_MODELS) throw new Error(`Choose at most ${MAX_MODELS} council models.`);
   if (new Set(input.models).size !== input.models.length) throw new Error("Council models must be unique.");
+  if ((input.attachmentIds ?? []).length !== new Set(input.attachmentIds ?? []).size) throw new Error("Attached files must be unique.");
   if (!input.judgeModel.trim()) throw new Error("Judge model is required.");
   if (input.debateDepth < 1 || input.debateDepth > 4) throw new Error("Debate depth must be between 1 and 4.");
 }
@@ -228,19 +266,20 @@ async function runResearchStage(
 ): Promise<ResearchResult> {
   await emit(context, { type: "stage", stage: "research_context", message: "Searching the web with Firecrawl." });
   const research = await searchWithFirecrawl(prompt, DEFAULT_FIRECRAWL_LIMIT);
-  const usage: UsageEvent = {
+  const usage = buildUsageEvent({
     stage: "research_context",
     modelId: "firecrawl",
-    promptTokens: research.estimatedContextTokens,
-    completionTokens: 0,
-    totalTokens: research.estimatedContextTokens,
+    usage: {
+      promptTokens: research.estimatedContextTokens,
+      completionTokens: 0,
+      totalTokens: research.estimatedContextTokens,
+      estimated: true
+    },
     latencyMs: 0,
-    status: "estimated",
-    estimated: true,
-    estimatedCost: 0
-  };
+    status: "estimated"
+  });
   usageEvents.push(usage);
-  await persistUsage(runId, context.userId, usage);
+  await persistRunUsage(runId, context.userId, usage);
 
   const admin = createSupabaseAdminClient();
   const { error } = await admin.from("research_results").insert({
@@ -262,9 +301,11 @@ async function runResearchStage(
 async function runInitialStage(
   input: CouncilRunInput,
   researchContext: string,
+  attachmentContext: string,
   context: RunContext,
   runId: string,
-  usageEvents: UsageEvent[]
+  usageEvents: UsageEvent[],
+  pricingByModel: ModelPricingMap
 ): Promise<StageResult[]> {
   await emit(context, { type: "stage", stage: "initial_answer", message: "Collecting initial answers." });
 
@@ -273,11 +314,12 @@ async function runInitialStage(
       callModelStage({
         modelId,
         stage: "initial_answer",
-        messages: buildInitialMessages(input.prompt, researchContext),
+        messages: buildInitialMessages(input.prompt, researchContext, attachmentContext),
         saveHistory: input.saveHistory,
         runId,
         userId: context.userId,
         usageEvents,
+        pricingByModel,
         context
       })
     )
@@ -287,12 +329,14 @@ async function runInitialStage(
 async function runCritiqueRound(params: {
   input: CouncilRunInput;
   researchContext: string;
+  attachmentContext: string;
   initialResponses: StageResult[];
   previousRounds: CritiqueResult[][];
   roundIndex: number;
   context: RunContext;
   runId: string;
   usageEvents: UsageEvent[];
+  pricingByModel: ModelPricingMap;
 }): Promise<CritiqueResult[]> {
   await emit(params.context, {
     type: "stage",
@@ -308,6 +352,7 @@ async function runCritiqueRound(params: {
           modelId,
           prompt: params.input.prompt,
           researchContext: params.researchContext,
+          attachmentContext: params.attachmentContext,
           initialResponses: params.initialResponses,
           previousRounds: params.previousRounds,
           roundIndex: params.roundIndex
@@ -317,6 +362,7 @@ async function runCritiqueRound(params: {
         runId: params.runId,
         userId: params.context.userId,
         usageEvents: params.usageEvents,
+        pricingByModel: params.pricingByModel,
         context: params.context
       })
     )
@@ -326,11 +372,13 @@ async function runCritiqueRound(params: {
 async function runRevisionStage(params: {
   input: CouncilRunInput;
   researchContext: string;
+  attachmentContext: string;
   initialResponses: StageResult[];
   critiqueRounds: CritiqueResult[][];
   context: RunContext;
   runId: string;
   usageEvents: UsageEvent[];
+  pricingByModel: ModelPricingMap;
 }): Promise<StageResult[]> {
   await emit(params.context, { type: "stage", stage: "revision", message: "Asking models to revise their answers." });
 
@@ -343,6 +391,7 @@ async function runRevisionStage(params: {
           modelId,
           prompt: params.input.prompt,
           researchContext: params.researchContext,
+          attachmentContext: params.attachmentContext,
           initialResponses: params.initialResponses,
           critiqueRounds: params.critiqueRounds
         }),
@@ -350,6 +399,7 @@ async function runRevisionStage(params: {
         runId: params.runId,
         userId: params.context.userId,
         usageEvents: params.usageEvents,
+        pricingByModel: params.pricingByModel,
         context: params.context
       })
     )
@@ -359,12 +409,14 @@ async function runRevisionStage(params: {
 async function runJudgeStage(params: {
   input: CouncilRunInput;
   research?: ResearchResult;
+  attachmentContext: string;
   initialResponses: StageResult[];
   critiqueRounds: CritiqueResult[][];
   revisions: StageResult[];
   context: RunContext;
   runId: string;
   usageEvents: UsageEvent[];
+  pricingByModel: ModelPricingMap;
 }): Promise<JudgeResult> {
   await emit(params.context, {
     type: "stage",
@@ -443,6 +495,7 @@ async function runJudgeStage(params: {
     stage: "judge_synthesis",
     modelId: params.input.judgeModel,
     completion,
+    pricingByModel: params.pricingByModel,
     usageEvents: params.usageEvents,
     context: params.context
   });
@@ -458,6 +511,7 @@ async function callModelStage(params: {
   runId: string;
   userId: string;
   usageEvents: UsageEvent[];
+  pricingByModel: ModelPricingMap;
   context: RunContext;
 }): Promise<StageResult> {
   const id = crypto.randomUUID();
@@ -501,6 +555,7 @@ async function callModelStage(params: {
     stage: params.stage,
     modelId: params.modelId,
     completion,
+    pricingByModel: params.pricingByModel,
     usageEvents: params.usageEvents,
     context: params.context
   });
@@ -515,6 +570,7 @@ async function callCritiqueStage(params: {
   runId: string;
   userId: string;
   usageEvents: UsageEvent[];
+  pricingByModel: ModelPricingMap;
   context: RunContext;
 }): Promise<CritiqueResult> {
   const id = crypto.randomUUID();
@@ -558,13 +614,14 @@ async function callCritiqueStage(params: {
     stage: "debate_critique",
     modelId: params.modelId,
     completion,
+    pricingByModel: params.pricingByModel,
     usageEvents: params.usageEvents,
     context: params.context
   });
   return result;
 }
 
-function buildInitialMessages(prompt: string, researchContext: string): ChatCompletionMessageParam[] {
+function buildInitialMessages(prompt: string, researchContext: string, attachmentContext: string): ChatCompletionMessageParam[] {
   return [
     {
       role: "system",
@@ -573,7 +630,11 @@ function buildInitialMessages(prompt: string, researchContext: string): ChatComp
     },
     {
       role: "user",
-      content: [researchContext && `Shared research context:\n${researchContext}`, `User prompt:\n${prompt}`]
+      content: [
+        researchContext && `Shared research context:\n${researchContext}`,
+        attachmentContext && `Attached file context:\n${attachmentContext}`,
+        `User prompt:\n${prompt}`
+      ]
         .filter(Boolean)
         .join("\n\n")
     }
@@ -584,6 +645,7 @@ function buildCritiqueMessages(params: {
   modelId: string;
   prompt: string;
   researchContext: string;
+  attachmentContext: string;
   initialResponses: StageResult[];
   previousRounds: CritiqueResult[][];
   roundIndex: number;
@@ -607,6 +669,7 @@ function buildCritiqueMessages(params: {
       content: [
         `Original prompt:\n${params.prompt}`,
         params.researchContext && `Research context:\n${params.researchContext}`,
+        params.attachmentContext && `Attached file context:\n${params.attachmentContext}`,
         `Initial council answers:\n${peerResponses}`,
         previous && `Previous debate rounds:\n${previous}`,
         `This is debate round ${params.roundIndex}. Respond as ${params.modelId}.`
@@ -621,6 +684,7 @@ function buildRevisionMessages(params: {
   modelId: string;
   prompt: string;
   researchContext: string;
+  attachmentContext: string;
   initialResponses: StageResult[];
   critiqueRounds: CritiqueResult[][];
 }): ChatCompletionMessageParam[] {
@@ -641,6 +705,7 @@ function buildRevisionMessages(params: {
       content: [
         `Original prompt:\n${params.prompt}`,
         params.researchContext && `Research context:\n${params.researchContext}`,
+        params.attachmentContext && `Attached file context:\n${params.attachmentContext}`,
         `Your initial answer:\n${ownInitial}`,
         `Council critiques:\n${critiques}`,
         "Write your revised answer now."
@@ -654,6 +719,7 @@ function buildRevisionMessages(params: {
 function buildJudgePrompt(params: {
   input: CouncilRunInput;
   research?: ResearchResult;
+  attachmentContext: string;
   initialResponses: StageResult[];
   critiqueRounds: CritiqueResult[][];
   revisions: StageResult[];
@@ -678,6 +744,9 @@ ${params.input.prompt}
 
 Sources:
 ${sourceList || "No web research was used."}
+
+Attached files:
+${params.attachmentContext || "No files were attached."}
 
 Initial answers:
 ${initial}
@@ -784,46 +853,47 @@ async function recordUsage(params: {
   userId: string;
   stage: CouncilStage;
   modelId: string;
-  completion: { usage: UsageEvent | { promptTokens: number; completionTokens: number; totalTokens: number; estimated?: boolean }; latencyMs: number };
+  completion: CompletionResult;
+  pricingByModel: ModelPricingMap;
   usageEvents: UsageEvent[];
   context: RunContext;
 }) {
-  const usage: UsageEvent = {
+  const usage = buildUsageEvent({
     stage: params.stage,
     modelId: params.modelId,
-    promptTokens: params.completion.usage.promptTokens,
-    completionTokens: params.completion.usage.completionTokens,
-    totalTokens: params.completion.usage.totalTokens,
-    estimated: params.completion.usage.estimated,
+    usage: params.completion.usage,
     latencyMs: params.completion.latencyMs,
-    status: params.completion.usage.estimated ? "estimated" : "complete",
-    estimatedCost: 0
-  };
+    pricing: params.pricingByModel[params.modelId]
+  });
   params.usageEvents.push(usage);
-  await persistUsage(params.runId, params.userId, usage);
+  await persistRunUsage(params.runId, params.userId, usage);
   await emit(params.context, { type: "usage", usage });
 }
 
-async function persistUsage(runId: string, userId: string, usage: UsageEvent) {
-  const admin = createSupabaseAdminClient();
-  const { error } = await admin.from("usage_events").insert({
-    user_id: userId,
-    run_id: runId,
-    stage: usage.stage,
-    model_id: usage.modelId ?? null,
-    prompt_tokens: usage.promptTokens,
-    completion_tokens: usage.completionTokens,
-    total_tokens: usage.totalTokens,
-    latency_ms: usage.latencyMs,
-    status: usage.status,
-    estimated_cost: usage.estimatedCost,
-    metadata: { estimated: usage.estimated ?? false }
-  });
-  assertSupabaseOk("saving token usage", error);
+async function persistRunUsage(runId: string, userId: string, usage: UsageEvent) {
+  try {
+    await persistUsageEvent({ runId, userId, usage });
+  } catch (error) {
+    assertSupabaseOk("saving token usage", error);
+  }
+}
+
+async function loadPricingByModel(): Promise<ModelPricingMap> {
+  try {
+    return pricingMapFromModels(await fetchOpenRouterModels());
+  } catch (error) {
+    console.warn("[council] could not load model pricing for cost estimates", getErrorLog(error));
+    return {};
+  }
 }
 
 async function emit(context: RunContext, event: CouncilEvent) {
   await context.onEvent?.(event);
+}
+
+function redactAttachmentText(attachment: CouncilAttachment): CouncilAttachment {
+  const { extractedText: _extractedText, ...safeAttachment } = attachment;
+  return safeAttachment;
 }
 
 function assertSupabaseOk(action: string, error: unknown) {

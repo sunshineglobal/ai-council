@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import { jsonError } from "@/lib/api";
 import { requireApiProfile } from "@/lib/auth";
 import { runCouncil } from "@/lib/council";
-import { completeWithOpenRouter } from "@/lib/openrouter";
+import { completeWithOpenRouter, fetchOpenRouterModels } from "@/lib/openrouter";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { buildUsageEvent, persistUsageEvent, pricingMapFromModels, type ModelPricingMap } from "@/lib/usage";
 import { evalRunSchema } from "@/lib/validation";
 
 export const runtime = "nodejs";
@@ -14,6 +15,7 @@ export async function POST(request: Request) {
     const profile = await requireApiProfile();
     const body = evalRunSchema.parse(await request.json());
     const admin = createSupabaseAdminClient();
+    const pricingByModel = await loadPricingByModel();
 
     const { data: evalSet, error: evalSetError } = await admin
       .from("eval_sets")
@@ -68,6 +70,20 @@ export async function POST(request: Request) {
         answer: council.finalAnswer
       });
       scores.push(score.score);
+      await persistUsageEvent({
+        userId: profile.id,
+        usage: buildUsageEvent({
+          stage: "eval_scoring",
+          modelId: body.judgeModel,
+          usage: score.completion.usage,
+          latencyMs: score.completion.latencyMs,
+          pricing: pricingByModel[body.judgeModel]
+        }),
+        metadata: {
+          evalRunId: evalRun.id,
+          itemIndex: index
+        }
+      });
 
       await admin.from("eval_scores").insert({
         eval_run_id: evalRun.id,
@@ -118,9 +134,18 @@ async function scoreAnswer(params: { judgeModel: string; prompt: string; rubric:
     const parsed = JSON.parse(completion.content) as { score?: number; rationale?: string };
     return {
       score: Math.max(0, Math.min(100, parsed.score ?? 0)),
-      rationale: parsed.rationale ?? completion.content
+      rationale: parsed.rationale ?? completion.content,
+      completion
     };
   } catch {
-    return { score: 0, rationale: completion.content };
+    return { score: 0, rationale: completion.content, completion };
+  }
+}
+
+async function loadPricingByModel(): Promise<ModelPricingMap> {
+  try {
+    return pricingMapFromModels(await fetchOpenRouterModels());
+  } catch {
+    return {};
   }
 }
