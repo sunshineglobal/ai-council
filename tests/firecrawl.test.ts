@@ -3,8 +3,7 @@ import { buildResearchContext, searchWithFirecrawl } from "@/lib/firecrawl";
 
 afterEach(() => {
   vi.restoreAllMocks();
-  delete process.env.OPENROUTER_API_KEY;
-  delete process.env.OPENROUTER_RESEARCH_MODEL;
+  delete process.env.FIRECRAWL_API_KEY;
 });
 
 describe("Firecrawl research context", () => {
@@ -28,30 +27,24 @@ describe("Firecrawl research context", () => {
     expect(context).toContain("https://example.com/a");
   });
 
-  it("uses OpenRouter web search with the Firecrawl engine", async () => {
-    process.env.OPENROUTER_API_KEY = "test-key";
+  it("uses the standalone Firecrawl search API", async () => {
+    process.env.FIRECRAWL_API_KEY = "test-key";
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify({
-          choices: [
+          data: [
             {
-              message: {
-                content: "Recent world news summary.",
-                annotations: [
-                  {
-                    type: "url_citation",
-                    url_citation: {
-                      title: "World News",
-                      url: "https://example.com/news",
-                      content: "Longer world news context.",
-                      start_index: 0,
-                      end_index: 12
-                    }
-                  }
-                ]
-              }
+              title: "World News",
+              url: "https://example.com/news",
+              description: "Recent world news summary.",
+              markdown: "Longer world news context."
+            },
+            {
+              title: "Missing URL",
+              markdown: "Ignored because Firecrawl did not return a URL."
             }
-          ]
+          ],
+          creditsUsed: 1.5
         }),
         { status: 200 }
       )
@@ -65,125 +58,70 @@ describe("Firecrawl research context", () => {
       url: "https://example.com/news",
       snippet: "Longer world news context."
     });
-    expect(result.credits).toBe(0);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://openrouter.ai/api/v1/chat/completions",
-      expect.objectContaining({
-        body: expect.stringContaining('"engine":"firecrawl"')
-      })
-    );
-  });
+    expect(result.credits).toBe(1.5);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
 
-  it("deduplicates OpenRouter web citations by URL", async () => {
-    process.env.OPENROUTER_API_KEY = "test-key";
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          choices: [
-            {
-              message: {
-                content: "Recent world news summary.",
-                annotations: [
-                  {
-                    type: "url_citation",
-                    url_citation: {
-                      title: "World News",
-                      url: "https://example.com/news",
-                      content: "First excerpt."
-                    }
-                  },
-                  {
-                    type: "url_citation",
-                    url_citation: {
-                      title: "World News Duplicate",
-                      url: "https://example.com/news",
-                      content: "Duplicate excerpt."
-                    }
-                  },
-                  {
-                    type: "url_citation",
-                    url_citation: {
-                      title: "Market News",
-                      url: "https://example.com/markets",
-                      content: "Market excerpt."
-                    }
-                  }
-                ]
-              }
-            }
-          ]
-        }),
-        { status: 200 }
-      )
-    );
-
-    const result = await searchWithFirecrawl("latest world news", 5);
-
-    expect(result.sources.map((source) => source.url)).toEqual(["https://example.com/news", "https://example.com/markets"]);
-  });
-
-  it("retries transient OpenRouter Firecrawl HTTP failures once", async () => {
-    process.env.OPENROUTER_API_KEY = "test-key";
-    const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            error: {
-              message: "Internal Server Error",
-              code: 500
-            }
-          }),
-          { status: 500 }
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            choices: [
-              {
-                message: {
-                  content: "Recovered summary.",
-                  annotations: [
-                    {
-                      type: "url_citation",
-                      url_citation: {
-                        title: "Recovered Source",
-                        url: "https://example.com/recovered",
-                        content: "Recovered context."
-                      }
-                    }
-                  ]
-                }
-              }
-            ]
-          }),
-          { status: 200 }
-        )
-      );
-
-    const result = await searchWithFirecrawl("latest world news", 5);
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(result.sources[0]).toMatchObject({
-      title: "Recovered Source",
-      url: "https://example.com/recovered"
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.firecrawl.dev/v2/search");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toMatchObject({
+      Authorization: "Bearer test-key",
+      "Content-Type": "application/json"
+    });
+    expect(JSON.parse(init.body as string)).toEqual({
+      query: "latest world news",
+      limit: 5,
+      scrapeOptions: {
+        formats: ["markdown"],
+        onlyMainContent: true
+      }
     });
   });
 
-  it("rejects OpenRouter web search errors clearly", async () => {
-    process.env.OPENROUTER_API_KEY = "test-key";
+  it("normalizes Firecrawl content fallbacks and snake_case credits", async () => {
+    process.env.FIRECRAWL_API_KEY = "test-key";
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify({
-          error: {
-            message: "Firecrawl plugin setup is required",
-            code: "plugin_setup_required"
-          }
+          data: [
+            {
+              url: "https://example.com/content",
+              content: "Content fallback."
+            },
+            {
+              url: "https://example.com/description",
+              description: "Description fallback."
+            }
+          ],
+          credits_used: 2
         }),
         { status: 200 }
       )
     );
 
-    await expect(searchWithFirecrawl("latest world news", 5)).rejects.toThrow(/Firecrawl plugin setup is required/);
+    const result = await searchWithFirecrawl("latest world news", 5);
+
+    expect(result.credits).toBe(2);
+    expect(result.sources[0]).toMatchObject({
+      title: "https://example.com/content",
+      markdown: "Content fallback.",
+      snippet: "Content fallback."
+    });
+    expect(result.sources[1]).toMatchObject({
+      title: "https://example.com/description",
+      description: "Description fallback.",
+      snippet: "Description fallback."
+    });
+  });
+
+  it("rejects Firecrawl HTTP errors clearly", async () => {
+    process.env.FIRECRAWL_API_KEY = "test-key";
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("Internal Server Error", { status: 500, statusText: "Internal Server Error" })
+    );
+
+    await expect(searchWithFirecrawl("latest world news", 5)).rejects.toThrow(
+      /Firecrawl search failed \(500\): Internal Server Error/
+    );
   });
 });

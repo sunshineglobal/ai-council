@@ -1,40 +1,25 @@
-import { getAppUrl, getEnv, getOptionalEnv } from "@/lib/env";
+import { getEnv } from "@/lib/env";
 import type { ResearchResult, ResearchSource } from "@/lib/types";
 import { estimateTokens } from "@/lib/token-usage";
 import { TtlCache } from "@/lib/cache";
 
-const OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions";
-const DEFAULT_RESEARCH_MODEL = "deepseek/deepseek-v4-flash";
+const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
 const RESEARCH_CONTEXT_CHARS_PER_SOURCE = 900;
 const RESEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
-const MAX_FIRECRAWL_ATTEMPTS = 2;
 const researchCache = new TtlCache<string, ResearchResult>(RESEARCH_CACHE_TTL_MS, 64);
 
-type OpenRouterCitation = {
+type FirecrawlSearchItem = {
   title?: string;
   url?: string;
+  description?: string;
+  markdown?: string;
   content?: string;
-  start_index?: number;
-  end_index?: number;
 };
 
-type OpenRouterWebAnnotation = {
-  type?: string;
-  url_citation?: OpenRouterCitation;
-};
-
-type OpenRouterWebSearchResponse = {
-  choices?: Array<{
-    message?: {
-      content?: unknown;
-      annotations?: OpenRouterWebAnnotation[];
-    };
-  }>;
-  error?: string | {
-    message?: string;
-    code?: string;
-    type?: string;
-  };
+type FirecrawlSearchResponse = {
+  data?: FirecrawlSearchItem[];
+  creditsUsed?: number;
+  credits_used?: number;
 };
 
 export async function searchWithFirecrawl(query: string, limit = 5): Promise<ResearchResult> {
@@ -43,89 +28,46 @@ export async function searchWithFirecrawl(query: string, limit = 5): Promise<Res
   const cached = cacheEnabled ? researchCache.get(cacheKey) : undefined;
   if (cached) return cached;
 
-  const response = await fetchFirecrawlResearch(query, limit);
+  const response = await fetch(FIRECRAWL_SEARCH_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${getEnv("FIRECRAWL_API_KEY")}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      query,
+      limit,
+      scrapeOptions: {
+        formats: ["markdown"],
+        onlyMainContent: true
+      }
+    })
+  });
 
-  const body = (await response.json()) as OpenRouterWebSearchResponse;
-  if (body.error) {
-    throw new Error(`OpenRouter Firecrawl web search failed: ${formatOpenRouterError(body.error)}`);
+  if (!response.ok) {
+    const details = await response.text().catch(() => "");
+    throw new Error(`Firecrawl search failed (${response.status}): ${details || response.statusText}`);
   }
 
-  const message = body.choices?.[0]?.message;
-  const summary = normalizeMessageContent(message?.content);
-  const sources = extractCitationSources(message?.annotations, summary)
+  const body = (await response.json()) as FirecrawlSearchResponse;
+  const credits = body.creditsUsed ?? body.credits_used ?? 0;
+  const sources = (body.data ?? [])
+    .filter((item) => item.url)
     .slice(0, limit)
     .map(normalizeSource);
 
-  const context = buildResearchContext({ query, sources, credits: 0, estimatedContextTokens: 0 });
+  const context = buildResearchContext({ query, sources, credits, estimatedContextTokens: 0 });
 
   const result: ResearchResult = {
     query,
     sources,
-    credits: 0,
+    credits,
     estimatedContextTokens: estimateTokens(context)
   };
   if (cacheEnabled) {
     researchCache.set(cacheKey, result);
   }
   return result;
-}
-
-async function fetchFirecrawlResearch(query: string, limit: number): Promise<Response> {
-  let lastStatus = 0;
-  let lastDetails = "";
-
-  for (let attempt = 1; attempt <= MAX_FIRECRAWL_ATTEMPTS; attempt += 1) {
-    const response = await fetch(OPENROUTER_CHAT_COMPLETIONS_URL, buildFirecrawlRequest(query, limit));
-    if (response.ok) return response;
-
-    lastStatus = response.status;
-    lastDetails = await response.text().catch(() => "");
-    if (!isRetriableStatus(response.status) || attempt === MAX_FIRECRAWL_ATTEMPTS) break;
-  }
-
-  throw new Error(`OpenRouter Firecrawl web search failed (${lastStatus}): ${lastDetails || "Internal Server Error"}`);
-}
-
-function buildFirecrawlRequest(query: string, limit: number): RequestInit {
-  const model = getOptionalEnv("OPENROUTER_RESEARCH_MODEL") ?? DEFAULT_RESEARCH_MODEL;
-  return {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${getEnv("OPENROUTER_API_KEY")}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": getAppUrl(),
-      "X-Title": "Personal AI Council"
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are a web research assistant. Search the web, extract current facts, and return a concise source-grounded briefing."
-        },
-        {
-          role: "user",
-          content: `Research this prompt for an AI council. Focus on current, reliable sources and cite them.\n\n${query}`
-        }
-      ],
-      temperature: 0.1,
-      max_tokens: 900,
-      plugins: [
-        {
-          id: "web",
-          engine: "firecrawl",
-          max_results: limit,
-          search_prompt:
-            "A Firecrawl web search was conducted through OpenRouter. Use the following web results as research context and cite relevant sources."
-        }
-      ]
-    })
-  };
-}
-
-function isRetriableStatus(status: number): boolean {
-  return status === 429 || status >= 500;
 }
 
 export function buildResearchContext(result?: ResearchResult): string {
@@ -140,61 +82,14 @@ export function buildResearchContext(result?: ResearchResult): string {
   ].join("\n\n");
 }
 
-function normalizeSource(item: OpenRouterCitation): ResearchSource {
-  const markdown = item.content ?? "";
+function normalizeSource(item: FirecrawlSearchItem): ResearchSource {
+  const markdown = item.markdown ?? item.content ?? "";
+  const description = item.description ?? "";
   return {
     title: item.title || item.url || "Untitled source",
     url: item.url ?? "",
-    description: markdown.slice(0, 240),
+    description,
     markdown,
-    snippet: markdown.slice(0, 500)
+    snippet: markdown.slice(0, 500) || description.slice(0, 500)
   };
-}
-
-function extractCitationSources(annotations: OpenRouterWebAnnotation[] | undefined, summary: string): OpenRouterCitation[] {
-  const seen = new Set<string>();
-  const sources: OpenRouterCitation[] = [];
-
-  for (const annotation of annotations ?? []) {
-    if (annotation.type !== "url_citation" || !annotation.url_citation?.url) continue;
-    const citation = annotation.url_citation;
-    const url = citation.url;
-    if (!url) continue;
-    if (seen.has(url)) continue;
-    seen.add(url);
-    sources.push({
-      ...citation,
-      url,
-      content: citation.content || excerptCitation(summary, citation)
-    });
-  }
-
-  return sources;
-}
-
-function excerptCitation(summary: string, citation: OpenRouterCitation) {
-  if (!summary || citation.start_index === undefined || citation.end_index === undefined) return "";
-  return summary.slice(Math.max(0, citation.start_index), Math.max(citation.start_index, citation.end_index));
-}
-
-function normalizeMessageContent(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") return part;
-        if (part && typeof part === "object" && "text" in part) {
-          return String((part as { text: unknown }).text);
-        }
-        return "";
-      })
-      .join("");
-  }
-  return "";
-}
-
-function formatOpenRouterError(error: OpenRouterWebSearchResponse["error"]) {
-  if (!error) return "Unknown error";
-  if (typeof error === "string") return error;
-  return [error.message, error.code && `code ${error.code}`, error.type].filter(Boolean).join(" ") || "Unknown error";
 }
