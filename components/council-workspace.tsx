@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, FileText, History, Loader2, PanelLeft, PanelRight, Paperclip, Plus, Search, Send, Settings2, SlidersHorizontal, Sparkles, User, X } from "lucide-react";
+import { Bot, FileText, History, Loader2, PanelLeft, Paperclip, Plus, Search, Send, Settings2, SlidersHorizontal, Sparkles, User, X } from "lucide-react";
 import { MarkdownBlock } from "@/components/markdown-block";
 import { RunTrace } from "@/components/run-trace";
 import { TokenBreakdown } from "@/components/token-breakdown";
@@ -159,7 +159,6 @@ export function CouncilWorkspace({
   const [thread, setThread] = useState<ThreadPayload | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [activityOpen, setActivityOpen] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activityEndRef = useRef<HTMLDivElement>(null);
@@ -403,7 +402,6 @@ export function CouncilWorkspace({
     setLiveJudge(null);
     setLiveResearch(undefined);
     setSelectedRunId(null);
-    setActivityOpen(true);
     window.requestAnimationFrame(() => promptRef.current?.focus());
     setUsageEvents([]);
     setStatusLog(["Starting council run."]);
@@ -607,10 +605,6 @@ export function CouncilWorkspace({
               </div>
             </div>
           </div>
-          <button className="button subtle" type="button" onClick={() => setActivityOpen(!activityOpen)}>
-            <PanelRight size={16} />
-            Activity
-          </button>
           <button className="button subtle" type="button" onClick={() => setSettingsOpen(true)}>
             <Settings2 size={16} />
             Settings
@@ -629,7 +623,6 @@ export function CouncilWorkspace({
               thread={thread}
               onShowDetails={(runId) => {
                 setSelectedRunId(runId);
-                setActivityOpen(true);
               }}
             />
           ) : null}
@@ -663,7 +656,6 @@ export function CouncilWorkspace({
               result={result}
               onShowDetails={() => {
                 setSelectedRunId(result.id);
-                setActivityOpen(true);
               }}
             />
           ) : null}
@@ -808,7 +800,7 @@ export function CouncilWorkspace({
         </div>
       </aside>
 
-      <aside className={`activity-pane ${activityOpen ? "open" : ""}`} aria-label="Council activity">
+      <aside className="activity-pane" aria-label="Council activity">
         <div className="activity-header">
           <div>
             <h2>Run Details &amp; Trace</h2>
@@ -816,9 +808,6 @@ export function CouncilWorkspace({
               {running ? "Running..." : activeRunDetails ? "Complete" : "Waiting"}
             </p>
           </div>
-          <button className="icon-button ghost" type="button" title="Close activity" onClick={() => setActivityOpen(false)}>
-            <X size={18} />
-          </button>
         </div>
         <div className="activity-scroll">
           {activeRunDetails ? (
@@ -880,7 +869,6 @@ export function CouncilWorkspace({
       </aside>
 
       {settingsOpen ? <button className="drawer-scrim" type="button" aria-label="Close settings" onClick={() => setSettingsOpen(false)} /> : null}
-      {activityOpen ? <button className="drawer-scrim" type="button" aria-label="Close activity" onClick={() => setActivityOpen(false)} /> : null}
     </main>
   );
 }
