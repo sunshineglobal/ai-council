@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { jsonError } from "@/lib/api";
 import { requireApiProfile } from "@/lib/auth";
+import { getErrorLog } from "@/lib/errors";
 import { fetchOpenRouterModels } from "@/lib/openrouter";
 
 const fallbackModels = [
@@ -17,7 +18,11 @@ export async function GET() {
     return NextResponse.json({ models: models.length ? models : fallbackModels });
   } catch (error) {
     if (error instanceof Error && error.message.includes("OpenRouter")) {
-      return NextResponse.json({ models: fallbackModels, warning: error.message });
+      console.warn("[models] model discovery unavailable; using fallbacks", getErrorLog(error));
+      return NextResponse.json({
+        models: fallbackModels,
+        warning: "Model discovery is temporarily unavailable; showing fallback models."
+      });
     }
     return jsonError(error);
   }

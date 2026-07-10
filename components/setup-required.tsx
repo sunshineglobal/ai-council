@@ -7,7 +7,7 @@ export function SetupRequired() {
   return (
     <main className="auth-page">
       <section className="auth-panel">
-        <div className="brand" style={{ marginBottom: 14 }}>
+        <div className="brand setup-brand">
           <span className="brand-mark">
             <AlertTriangle size={18} />
           </span>

@@ -1,11 +1,14 @@
 import { jsonError } from "@/lib/api";
 import { requireApiProfile } from "@/lib/auth";
 import { runCouncil } from "@/lib/council";
-import { getErrorLog, getErrorMessage } from "@/lib/errors";
+import { isCouncilAbortError } from "@/lib/council/abort";
+import { getErrorLog } from "@/lib/errors";
 import { councilRunSchema } from "@/lib/validation";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
+
+const HEARTBEAT_INTERVAL_MS = 15_000;
 
 export async function POST(request: Request) {
   try {
@@ -22,32 +25,57 @@ export async function POST(request: Request) {
       saveHistory: input.saveHistory
     });
 
+    const runAbortController = new AbortController();
     let closed = false;
-    const stream = new ReadableStream({
-      start(controller) {
-        const closeFromAbort = () => {
-          closed = true;
-        };
-        request.signal.addEventListener("abort", closeFromAbort, { once: true });
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let terminalEventSent = false;
 
-        const send = (event: unknown, type = "message") => {
-          if (closed) return;
+    const abortRun = (reason?: unknown) => {
+      if (!runAbortController.signal.aborted) runAbortController.abort(reason);
+    };
+    const abortFromRequest = () => abortRun(request.signal.reason);
+    if (request.signal.aborted) abortFromRequest();
+    else request.signal.addEventListener("abort", abortFromRequest, { once: true });
+
+    const cleanup = () => {
+      request.signal.removeEventListener("abort", abortFromRequest);
+      if (heartbeat) {
+        clearInterval(heartbeat);
+        heartbeat = undefined;
+      }
+    };
+
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const sendBlock = (block: string): boolean => {
+          if (closed) return false;
           try {
-            controller.enqueue(encoder.encode(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`));
+            controller.enqueue(encoder.encode(block));
+            return true;
           } catch (error) {
             closed = true;
+            abortRun(error);
             console.warn("[council.stream] could not send event to client", getErrorLog(error));
+            return false;
           }
         };
+        const send = (event: unknown, type = "message") =>
+          sendBlock(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
+
+        sendBlock(": connected\n\n");
+        heartbeat = setInterval(() => sendBlock(": heartbeat\n\n"), HEARTBEAT_INTERVAL_MS);
 
         runCouncil(input, {
           userId: profile.id,
           userEmail: profile.email,
-          signal: request.signal,
-          onEvent: async (event) => send(event, event.type)
+          signal: runAbortController.signal,
+          onEvent: async (event) => {
+            if (event.type === "complete" || event.type === "error") terminalEventSent = true;
+            send(event, event.type);
+          }
         })
           .catch((error) => {
-            if (request.signal.aborted || isAbortLikeError(error)) {
+            if (isCouncilAbortError(error, runAbortController.signal)) {
               console.info("[council.stream] run stopped", {
                 userId: profile.id,
                 modelCount: input.models.length,
@@ -55,23 +83,25 @@ export async function POST(request: Request) {
               });
               return;
             }
-            const message = getErrorMessage(error, "Council run failed.");
             console.error("[council.stream] run failed", {
               userId: profile.id,
               modelCount: input.models.length,
               judgeModel: input.judgeModel,
               ...getErrorLog(error)
             });
-            send(
-              {
-                type: "error",
-                message
-              },
-              "error"
-            );
+            if (!terminalEventSent) {
+              terminalEventSent = true;
+              send(
+                {
+                  type: "error",
+                  message: "Council run failed."
+                },
+                "error"
+              );
+            }
           })
           .finally(() => {
-            request.signal.removeEventListener("abort", closeFromAbort);
+            cleanup();
             if (closed) return;
             closed = true;
             try {
@@ -81,8 +111,10 @@ export async function POST(request: Request) {
             }
           });
       },
-      cancel() {
+      cancel(reason) {
         closed = true;
+        abortRun(reason);
+        cleanup();
       }
     });
 
@@ -90,16 +122,12 @@ export async function POST(request: Request) {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache, no-transform",
-        Connection: "keep-alive"
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no"
       }
     });
   } catch (error) {
     console.error("[council.stream] request failed before stream start", getErrorLog(error));
     return jsonError(error);
   }
-}
-
-function isAbortLikeError(error: unknown) {
-  if (!(error instanceof Error)) return false;
-  return error.name === "AbortError" || error.name === "APIUserAbortError";
 }

@@ -1,0 +1,4 @@
+export const MAX_COUNCIL_MODELS = 8;
+export const MAX_COUNCIL_DEBATE_ROUNDS = 4;
+export const MAX_ATTACHMENT_COUNT = 5;
+export const MAX_PROMPT_CHARACTERS = 12_000;

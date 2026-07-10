@@ -1,6 +1,11 @@
 import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
-import { buildAttachmentContext, extractTextFromAttachment, sanitizeAttachmentFilename } from "@/lib/attachments";
+import {
+  buildAttachmentContext,
+  extractTextFromAttachment,
+  MAX_ATTACHMENT_CONTEXT_CHARS,
+  sanitizeAttachmentFilename
+} from "@/lib/attachments";
 import type { CouncilAttachment } from "@/lib/types";
 
 describe("attachment helpers", () => {
@@ -40,6 +45,18 @@ describe("attachment helpers", () => {
     expect(context).toContain("[File 1] notes.md");
     expect(context).toContain("Important context");
     expect(context).toContain("Extraction status: unsupported");
+  });
+
+  it("keeps the complete attachment context within its character budget", () => {
+    const context = buildAttachmentContext(
+      Array.from({ length: 5 }, (_, index) => attachment({
+        filename: `large-${index}.txt`,
+        extractedText: "x".repeat(MAX_ATTACHMENT_CONTEXT_CHARS),
+        fileSize: MAX_ATTACHMENT_CONTEXT_CHARS
+      }))
+    );
+
+    expect(context.length).toBeLessThanOrEqual(MAX_ATTACHMENT_CONTEXT_CHARS);
   });
 });
 

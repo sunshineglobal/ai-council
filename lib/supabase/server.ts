@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
-import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import { createServerClient } from "@supabase/ssr";
+import type { SetAllCookies } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import { getEnv } from "@/lib/env";
 
@@ -11,19 +12,14 @@ export async function createSupabaseServerClient() {
     getEnv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"),
     {
       cookies: {
-        get(name: string) {
-          return cookieStore.get(name)?.value;
+        getAll() {
+          return cookieStore.getAll();
         },
-        set(name: string, value: string, options: CookieOptions) {
+        setAll(cookiesToSet: Parameters<SetAllCookies>[0]) {
           try {
-            cookieStore.set({ name, value, ...options });
-          } catch {
-            // Server components cannot always write cookies. Middleware handles refreshes.
-          }
-        },
-        remove(name: string, options: CookieOptions) {
-          try {
-            cookieStore.set({ name, value: "", ...options });
+            cookiesToSet.forEach(({ name, value, options }) => {
+              cookieStore.set(name, value, options);
+            });
           } catch {
             // Server components cannot always write cookies. Middleware handles refreshes.
           }

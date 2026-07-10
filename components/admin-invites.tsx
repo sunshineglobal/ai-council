@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Loader2, Plus, Trash2 } from "lucide-react";
+import { requestJson } from "@/lib/client-api";
 
 type Invite = {
   id: string;
@@ -15,39 +16,59 @@ export function AdminInvites() {
   const [invites, setInvites] = useState<Invite[]>([]);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"admin" | "member">("member");
-  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
 
   useEffect(() => {
-    void loadInvites();
-  }, []);
+    const controller = new AbortController();
+    setLoading(true);
+    void requestJson<{ invites: Invite[] }>("/api/admin/invites", { signal: controller.signal })
+      .then((body) => setInvites(body.invites))
+      .catch((loadError: unknown) => {
+        if (loadError instanceof Error && loadError.name === "AbortError") return;
+        setError(loadError instanceof Error ? loadError.message : "Could not load invites.");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
 
-  async function loadInvites() {
-    const response = await fetch("/api/admin/invites");
-    if (!response.ok) return;
-    const body = (await response.json()) as { invites: Invite[] };
-    setInvites(body.invites);
-  }
+    return () => controller.abort();
+  }, [refreshVersion]);
 
   async function addInvite(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setMessage("");
-    const response = await fetch("/api/admin/invites", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, role })
-    });
-    const body = (await response.json().catch(() => ({}))) as { error?: string };
-    if (!response.ok) {
-      setMessage(body.error ?? "Could not add invite.");
-      return;
+    setError("");
+    setSubmitting(true);
+    try {
+      await requestJson<{ invite: Invite }>("/api/admin/invites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, role })
+      });
+      setEmail("");
+      setRefreshVersion((version) => version + 1);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Could not add invite.");
+    } finally {
+      setSubmitting(false);
     }
-    setEmail("");
-    await loadInvites();
   }
 
-  async function deleteInvite(id: string) {
-    await fetch(`/api/admin/invites/${id}`, { method: "DELETE" });
-    await loadInvites();
+  async function deleteInvite(invite: Invite) {
+    if (deletingId || !window.confirm(`Delete the invite for ${invite.email}?`)) return;
+    setDeletingId(invite.id);
+    setError("");
+    try {
+      await requestJson<{ ok: true }>(`/api/admin/invites/${invite.id}`, { method: "DELETE" });
+      setInvites((current) => current.filter((item) => item.id !== invite.id));
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Could not delete invite.");
+    } finally {
+      setDeletingId(null);
+    }
   }
 
   return (
@@ -66,42 +87,56 @@ export function AdminInvites() {
               <option value="admin">Admin</option>
             </select>
           </label>
-          <button className="button primary" type="submit">
+          <button className="button primary" disabled={submitting} type="submit">
             <Plus size={16} />
-            Add
+            {submitting ? "Adding" : "Add"}
           </button>
         </div>
-        {message ? <p className="error-text">{message}</p> : null}
+        {error ? <p className="error-text" role="alert">{error}</p> : null}
       </form>
 
       <section className="panel">
         <h2>Invite list</h2>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Email</th>
-              <th>Role</th>
-              <th>Status</th>
-              <th>Created</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {invites.map((invite) => (
-              <tr key={invite.id}>
-                <td>{invite.email}</td>
-                <td>{invite.role}</td>
-                <td>{invite.accepted_at ? "accepted" : "pending"}</td>
-                <td>{new Date(invite.created_at).toLocaleString()}</td>
-                <td>
-                  <button className="icon-button" title="Delete invite" type="button" onClick={() => deleteInvite(invite.id)}>
-                    <Trash2 size={16} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {loading ? <p className="muted small" role="status">Loading invites.</p> : null}
+        {!loading && invites.length === 0 ? <p className="muted small">No invites yet.</p> : null}
+        {invites.length ? (
+          <div className="table-scroll">
+            <table className="table">
+              <caption className="sr-only">Invited users</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Email</th>
+                  <th scope="col">Role</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Created</th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invites.map((invite) => (
+                  <tr key={invite.id}>
+                    <td>{invite.email}</td>
+                    <td>{invite.role}</td>
+                    <td>{invite.accepted_at ? "accepted" : "pending"}</td>
+                    <td>{new Date(invite.created_at).toLocaleString()}</td>
+                    <td>
+                      <button
+                        aria-label={`Delete invite for ${invite.email}`}
+                        className="icon-button"
+                        disabled={deletingId !== null}
+                        title={`Delete invite for ${invite.email}`}
+                        type="button"
+                        onClick={() => void deleteInvite(invite)}
+                      >
+                        {deletingId === invite.id ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
       </section>
     </section>
   );

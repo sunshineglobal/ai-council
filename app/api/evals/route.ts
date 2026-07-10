@@ -1,21 +1,9 @@
 import { NextResponse } from "next/server";
-import { jsonError } from "@/lib/api";
+import { apiRoute } from "@/lib/api";
 import { requireApiProfile } from "@/lib/auth";
-import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { listEvalRunsForUser } from "@/lib/evals/repository";
 
-export async function GET() {
-  try {
-    const profile = await requireApiProfile();
-    const admin = createSupabaseAdminClient();
-    const { data, error } = await admin
-      .from("eval_runs")
-      .select("*, eval_sets(name, rubric), eval_scores(*)")
-      .eq("user_id", profile.id)
-      .order("created_at", { ascending: false })
-      .limit(20);
-    if (error) throw error;
-    return NextResponse.json({ evals: data ?? [] });
-  } catch (error) {
-    return jsonError(error);
-  }
-}
+export const GET = apiRoute(async () => {
+  const profile = await requireApiProfile();
+  return NextResponse.json({ evals: await listEvalRunsForUser(profile.id) });
+});

@@ -1,0 +1,133 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildLiveRunResult,
+  initialLiveRunState,
+  liveRunReducer
+} from "@/components/council-workspace/live-run-state";
+import {
+  DEFAULT_COUNCIL,
+  DEFAULT_JUDGE,
+  isDefaultCouncil,
+  reconcileCouncilModels,
+  reconcileJudgeModel
+} from "@/components/council-workspace/model-selection";
+import { parseCouncilAnswer } from "@/components/council-workspace/result-utils";
+import type { CritiqueResult, ModelOption } from "@/lib/types";
+
+const config = {
+  models: ["model-a", "model-b"],
+  judgeModel: "judge-a",
+  debateDepth: 2,
+  researchEnabled: true,
+  saveHistory: true,
+  threadId: "thread-a"
+};
+
+describe("workspace model defaults", () => {
+  it("keeps available defaults and falls back to the first models when none remain", () => {
+    const partialDefaults = models(DEFAULT_COUNCIL[1], "model-a", "model-b");
+    expect(reconcileCouncilModels([...DEFAULT_COUNCIL], partialDefaults)).toEqual([DEFAULT_COUNCIL[1]]);
+    expect(reconcileCouncilModels([...DEFAULT_COUNCIL], models("model-a", "model-b", "model-c", "model-d")))
+      .toEqual(["model-a", "model-b", "model-c"]);
+  });
+
+  it("preserves custom choices and reconciles only the default judge", () => {
+    const available = models(DEFAULT_JUDGE, "judge-b");
+    expect(reconcileCouncilModels(["custom-model"], available)).toEqual(["custom-model"]);
+    expect(reconcileJudgeModel(DEFAULT_JUDGE, available)).toBe(DEFAULT_JUDGE);
+    expect(reconcileJudgeModel(DEFAULT_JUDGE, models("judge-b"))).toBe("judge-b");
+    expect(reconcileJudgeModel("custom-judge", available)).toBe("custom-judge");
+    expect(isDefaultCouncil([...DEFAULT_COUNCIL])).toBe(true);
+    expect(isDefaultCouncil([...DEFAULT_COUNCIL].reverse())).toBe(false);
+  });
+});
+
+describe("live run reducer", () => {
+  it("snapshots submitted configuration and builds live details from it", () => {
+    const submittedModels = [...config.models];
+    const state = liveRunReducer(initialLiveRunState, {
+      type: "start",
+      prompt: "Compare the options",
+      attachments: [],
+      config: { ...config, models: submittedModels },
+      startedAt: "2026-07-10T00:00:00.000Z"
+    });
+
+    submittedModels.push("model-c");
+    const result = buildLiveRunResult(state);
+
+    expect(state.config?.models).toEqual(["model-a", "model-b"]);
+    expect(result?.models).toEqual(["model-a", "model-b"]);
+    expect(result?.judgeModel).toBe("judge-a");
+    expect(result?.createdAt).toBe("2026-07-10T00:00:00.000Z");
+  });
+
+  it("updates critique rounds without mutating previous reducer snapshots", () => {
+    const started = liveRunReducer(initialLiveRunState, {
+      type: "start",
+      prompt: "Review",
+      attachments: [],
+      config,
+      startedAt: "2026-07-10T00:00:00.000Z"
+    });
+    const original = critique("first");
+    const first = liveRunReducer(started, { type: "event", event: { type: "critique", critique: original } });
+    const second = liveRunReducer(first, {
+      type: "event",
+      event: { type: "critique", critique: critique("revised") }
+    });
+
+    expect(second.critiqueRounds).not.toBe(first.critiqueRounds);
+    expect(second.critiqueRounds[0]).not.toBe(first.critiqueRounds[0]);
+    expect(first.critiqueRounds[0][0].content).toBe("first");
+    expect(second.critiqueRounds[0][0].content).toBe("revised");
+  });
+
+  it("records stop state once and returns to idle", () => {
+    const started = liveRunReducer(initialLiveRunState, {
+      type: "start",
+      prompt: "Review",
+      attachments: [],
+      config,
+      startedAt: "2026-07-10T00:00:00.000Z"
+    });
+    const stopping = liveRunReducer(started, { type: "stop_requested" });
+    const stopped = liveRunReducer(stopping, { type: "stopped" });
+
+    expect(stopping.phase).toBe("stopping");
+    expect(stopped.phase).toBe("idle");
+    expect(stopped.statusLog.at(-1)).toBe("Council run stopped.");
+  });
+});
+
+describe("council answer parsing", () => {
+  it("normalizes structured judge output", () => {
+    expect(parseCouncilAnswer(JSON.stringify({
+      final_answer: "Choose option A.",
+      consensus: "A is safest.",
+      disagreements: ["Timing"],
+      blind_spots: ["Migration cost"]
+    }))).toEqual({
+      mainAnswer: "Choose option A.",
+      consensus: "A is safest.",
+      disagreements: ["Timing"],
+      blindSpots: ["Migration cost"]
+    });
+  });
+});
+
+function critique(content: string): CritiqueResult {
+  return {
+    id: "critique-a",
+    roundIndex: 1,
+    modelId: "model-a",
+    content,
+    usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+    latencyMs: 20,
+    status: "complete"
+  };
+}
+
+function models(...ids: string[]): ModelOption[] {
+  return ids.map((id) => ({ id, name: id }));
+}

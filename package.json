@@ -2,6 +2,9 @@
   "name": "ai-council",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -9,7 +12,9 @@
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "check": "npm run lint && npm run typecheck && npm test"
   },
   "dependencies": {
     "@supabase/ssr": "^0.6.1",
@@ -23,14 +28,11 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.51.1",
-    "@testing-library/jest-dom": "^6.6.3",
-    "@testing-library/react": "^16.1.0",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.17",
     "@types/react-dom": "^18.3.5",
     "eslint": "^8.57.1",
     "eslint-config-next": "^15.5.16",
-    "jsdom": "^25.0.1",
     "typescript": "^5.7.2",
     "vitest": "^4.1.9"
   },

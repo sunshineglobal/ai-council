@@ -37,9 +37,14 @@ type FirecrawlSearchResponse = {
   credits_used?: number;
 };
 
-export async function searchWithFirecrawl(query: string, limit = DEFAULT_FIRECRAWL_LIMIT, signal?: AbortSignal): Promise<ResearchResult> {
+export async function searchWithFirecrawl(
+  query: string,
+  limit = DEFAULT_FIRECRAWL_LIMIT,
+  signal?: AbortSignal,
+  cacheScope = "shared"
+): Promise<ResearchResult> {
   const normalizedLimit = normalizeFirecrawlLimit(limit);
-  const cacheKey = `${normalizedLimit}::${query.trim().toLowerCase()}`;
+  const cacheKey = JSON.stringify([cacheScope, normalizedLimit, query.trim()]);
   const cacheEnabled = process.env.NODE_ENV !== "test";
   const cached = cacheEnabled ? researchCache.get(cacheKey) : undefined;
   if (cached) return cached;

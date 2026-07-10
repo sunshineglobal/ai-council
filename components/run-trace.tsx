@@ -1,5 +1,3 @@
-"use client";
-
 import { ChevronDown, ExternalLink } from "lucide-react";
 import { MarkdownView as MarkdownBlock } from "@/components/markdown-view";
 import type { CouncilRunResult } from "@/lib/types";
@@ -73,26 +71,29 @@ export function RunTrace({ result }: { result: CouncilRunResult }) {
 
       <Trace title="Judge ranking" meta={result.judge.modelId}>
         {result.judge.rankings.length ? (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Rank</th>
-                <th>Model</th>
-                <th>Score</th>
-                <th>Rationale</th>
-              </tr>
-            </thead>
-            <tbody>
-              {result.judge.rankings.map((ranking) => (
-                <tr key={`${ranking.rank}-${ranking.modelId}`}>
-                  <td>{ranking.rank}</td>
-                  <td>{ranking.modelId}</td>
-                  <td>{ranking.score}</td>
-                  <td>{ranking.rationale}</td>
+          <div className="table-scroll">
+            <table className="table">
+              <caption className="sr-only">Judge model rankings</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Rank</th>
+                  <th scope="col">Model</th>
+                  <th scope="col">Score</th>
+                  <th scope="col">Rationale</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {result.judge.rankings.map((ranking) => (
+                  <tr key={`${ranking.rank}-${ranking.modelId}`}>
+                    <td>{ranking.rank}</td>
+                    <td>{ranking.modelId}</td>
+                    <td>{ranking.score}</td>
+                    <td>{ranking.rationale}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : (
           <MarkdownBlock text={result.judge.error} empty="The judge did not return rankings." />
         )}

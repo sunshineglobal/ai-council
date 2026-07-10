@@ -1,5 +1,3 @@
-"use client";
-
 import type { TokenTotals, UsageEvent } from "@/lib/types";
 import { formatCurrency, formatNumber } from "@/lib/format";
 import { summarizeUsage } from "@/lib/token-usage";
@@ -32,7 +30,7 @@ export function TokenBreakdown({
           <strong>{formatNumber(computed.totalTokens)}</strong>
         </div>
       </div>
-      <div className="pill-row" style={{ marginTop: 10 }}>
+      <div className="pill-row token-summary-pills">
         {computed.estimated ? <span className="pill">Some usage estimated</span> : null}
         <span className="pill">Estimated cost {formatCurrency(costEstimate)}</span>
       </div>
@@ -59,28 +57,31 @@ function UsageTable({ title, rows }: { title: string; rows: Record<string, { pro
   if (entries.length === 0) return null;
 
   return (
-    <div style={{ marginTop: 14 }}>
+    <div className="usage-table-section">
       <h3>{title}</h3>
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Prompt</th>
-            <th>Completion</th>
-            <th>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {entries.map(([name, usage]) => (
-            <tr key={name}>
-              <td>{name}</td>
-              <td>{formatNumber(usage.promptTokens)}</td>
-              <td>{formatNumber(usage.completionTokens)}</td>
-              <td>{formatNumber(usage.totalTokens)}</td>
+      <div className="table-scroll">
+        <table className="table">
+          <caption className="sr-only">Token usage {title.toLowerCase()}</caption>
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Prompt</th>
+              <th scope="col">Completion</th>
+              <th scope="col">Total</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {entries.map(([name, usage]) => (
+              <tr key={name}>
+                <td>{name}</td>
+                <td>{formatNumber(usage.promptTokens)}</td>
+                <td>{formatNumber(usage.completionTokens)}</td>
+                <td>{formatNumber(usage.totalTokens)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

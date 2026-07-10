@@ -1,23 +1,12 @@
 import { NextResponse } from "next/server";
-import { jsonError } from "@/lib/api";
+import { apiRoute } from "@/lib/api";
 import { requireApiProfile } from "@/lib/auth";
+import { listUserChats } from "@/lib/chats";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
-export async function GET() {
-  try {
-    const profile = await requireApiProfile();
-    const admin = createSupabaseAdminClient();
-    const { data, error } = await admin
-      .from("chat_threads")
-      .select("id,title,created_at,updated_at")
-      .eq("user_id", profile.id)
-      .eq("is_ephemeral", false)
-      .order("updated_at", { ascending: false })
-      .limit(40);
+export const GET = apiRoute(async () => {
+  const profile = await requireApiProfile();
+  const chats = await listUserChats(createSupabaseAdminClient(), profile.id);
 
-    if (error) throw error;
-    return NextResponse.json({ chats: data ?? [] });
-  } catch (error) {
-    return jsonError(error);
-  }
-}
+  return NextResponse.json({ chats });
+});

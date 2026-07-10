@@ -1,17 +1,11 @@
 import { redirect } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
+import { ApiError } from "@/lib/api-error";
 import { getAppUrl, getOptionalEnv, hasSupabaseEnv } from "@/lib/env";
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
 import type { AuthProfile, UserRole } from "@/lib/types";
 
-export class ApiError extends Error {
-  status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-  }
-}
+export { ApiError } from "@/lib/api-error";
 
 export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
@@ -82,43 +76,24 @@ export async function ensureProfile(user: User): Promise<AuthProfile> {
   if (existingError) throw existingError;
 
   if (existingProfile) {
-    const role = invite.role;
+    if (existingProfile.id !== user.id) {
+      throw new ApiError(409, "This email is linked to a different account. Contact an administrator.");
+    }
 
-    if (existingProfile.id === user.id) {
-      const { data, error } = await admin
-        .from("profiles")
-        .update({ role, updated_at: new Date().toISOString() })
-        .eq("id", user.id)
-        .select("id,email,role,default_save_history,monthly_budget_usd")
-        .single();
-
-      if (error) throw error;
-      await markInviteAccepted(email);
-      return data as AuthProfile;
+    if (existingProfile.role === invite.role) {
+      return existingProfile as AuthProfile;
     }
 
     const { data, error } = await admin
       .from("profiles")
-      .update({ id: user.id, role, updated_at: new Date().toISOString() })
+      .update({ role: invite.role, updated_at: new Date().toISOString() })
+      .eq("id", user.id)
       .eq("email", email)
       .select("id,email,role,default_save_history,monthly_budget_usd")
       .single();
 
-    if (!error) {
-      await markInviteAccepted(email);
-      return data as AuthProfile;
-    }
-
-    const { data: fallbackData, error: fallbackError } = await admin
-      .from("profiles")
-      .update({ role, updated_at: new Date().toISOString() })
-      .eq("email", email)
-      .select("id,email,role,default_save_history,monthly_budget_usd")
-      .single();
-
-    if (fallbackError) throw fallbackError;
-    await markInviteAccepted(email);
-    return fallbackData as AuthProfile;
+    if (error) throw error;
+    return data as AuthProfile;
   }
 
   const { data, error } = await admin

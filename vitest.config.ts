@@ -3,9 +3,7 @@ import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   test: {
-    environment: "jsdom",
-    globals: true,
-    setupFiles: ["./vitest.setup.ts"],
+    environment: "node",
     exclude: ["node_modules", ".next", "tests/e2e/**"]
   },
   resolve: {

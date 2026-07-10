@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Beaker, Play } from "lucide-react";
+import { requestJson } from "@/lib/client-api";
 import type { ModelOption } from "@/lib/types";
 
 type EvalRun = {
@@ -14,6 +15,8 @@ type EvalRun = {
   eval_scores?: Array<{ score: number | null; prompt: string; rationale: string | null }>;
 };
 
+type Notice = { kind: "error" | "status" | "success"; text: string };
+
 export function EvalDashboard() {
   const [models, setModels] = useState<ModelOption[]>([]);
   const [evals, setEvals] = useState<EvalRun[]>([]);
@@ -22,29 +25,36 @@ export function EvalDashboard() {
   const [items, setItems] = useState("Explain the tradeoffs of using multiple LLMs for one decision.");
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [judgeModel, setJudgeModel] = useState("");
+  const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
-  const [message, setMessage] = useState("");
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
 
   useEffect(() => {
-    void loadModels();
-    void loadEvals();
-  }, []);
+    const controller = new AbortController();
+    setLoading(true);
+    void Promise.all([
+      requestJson<{ models: ModelOption[] }>("/api/models", { signal: controller.signal }),
+      requestJson<{ evals: EvalRun[] }>("/api/evals", { signal: controller.signal })
+    ])
+      .then(([modelsBody, evalsBody]) => {
+        setModels(modelsBody.models);
+        setSelectedModels((current) => (
+          current.length ? current : modelsBody.models.slice(0, 3).map((model) => model.id)
+        ));
+        setJudgeModel((current) => current || modelsBody.models[0]?.id || "");
+        setEvals(evalsBody.evals);
+      })
+      .catch((loadError: unknown) => {
+        if (loadError instanceof Error && loadError.name === "AbortError") return;
+        setNotice({ kind: "error", text: loadError instanceof Error ? loadError.message : "Could not load evals." });
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
 
-  async function loadModels() {
-    const response = await fetch("/api/models");
-    if (!response.ok) return;
-    const body = (await response.json()) as { models: ModelOption[] };
-    setModels(body.models);
-    setSelectedModels((current) => (current.length ? current : body.models.slice(0, 3).map((model) => model.id)));
-    setJudgeModel((current) => current || body.models[0]?.id || "");
-  }
-
-  async function loadEvals() {
-    const response = await fetch("/api/evals");
-    if (!response.ok) return;
-    const body = (await response.json()) as { evals: EvalRun[] };
-    setEvals(body.evals);
-  }
+    return () => controller.abort();
+  }, [refreshVersion]);
 
   function toggleModel(modelId: string) {
     setSelectedModels((current) => {
@@ -56,8 +66,6 @@ export function EvalDashboard() {
 
   async function runEval(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setRunning(true);
-    setMessage("Running eval. This can take a few minutes.");
     const prompts = items
       .split("\n")
       .map((item) => item.trim())
@@ -65,28 +73,34 @@ export function EvalDashboard() {
       .slice(0, 5)
       .map((prompt) => ({ prompt }));
 
-    const response = await fetch("/api/evals/run", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name,
-        rubric,
-        items: prompts,
-        models: selectedModels,
-        judgeModel,
-        debateDepth: 1,
-        researchEnabled: false
-      })
-    });
-
-    const body = (await response.json().catch(() => ({}))) as { error?: string; aggregateScore?: number };
-    if (!response.ok) {
-      setMessage(body.error ?? "Eval failed.");
-    } else {
-      setMessage(`Eval complete. Aggregate score: ${Math.round(body.aggregateScore ?? 0)}`);
-      await loadEvals();
+    if (!prompts.length) {
+      setNotice({ kind: "error", text: "Add at least one prompt." });
+      return;
     }
-    setRunning(false);
+
+    setRunning(true);
+    setNotice({ kind: "status", text: "Running eval. This can take a few minutes." });
+    try {
+      const body = await requestJson<{ aggregateScore: number }>("/api/evals/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          rubric,
+          items: prompts,
+          models: selectedModels,
+          judgeModel,
+          debateDepth: 1,
+          researchEnabled: false
+        })
+      });
+      setNotice({ kind: "success", text: `Eval complete. Aggregate score: ${Math.round(body.aggregateScore)}` });
+      setRefreshVersion((version) => version + 1);
+    } catch (runError) {
+      setNotice({ kind: "error", text: runError instanceof Error ? runError.message : "Eval failed." });
+    } finally {
+      setRunning(false);
+    }
   }
 
   return (
@@ -135,31 +149,45 @@ export function EvalDashboard() {
           <Play size={16} />
           {running ? "Running" : "Run eval"}
         </button>
-        {message ? <p className={message.includes("failed") ? "error-text" : "success-text"}>{message}</p> : null}
+        {notice ? (
+          <p
+            className={notice.kind === "error" ? "error-text" : "success-text"}
+            role={notice.kind === "error" ? "alert" : "status"}
+          >
+            {notice.text}
+          </p>
+        ) : null}
       </form>
 
       <section className="panel">
         <h2>Recent evals</h2>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Status</th>
-              <th>Score</th>
-              <th>Created</th>
-            </tr>
-          </thead>
-          <tbody>
-            {evals.map((evalRun) => (
-              <tr key={evalRun.id}>
-                <td>{evalRun.eval_sets?.name ?? "Eval"}</td>
-                <td>{evalRun.status}</td>
-                <td>{evalRun.aggregate_score?.toFixed(1) ?? "-"}</td>
-                <td>{new Date(evalRun.created_at).toLocaleString()}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {loading ? <p className="muted small" role="status">Loading evals.</p> : null}
+        {!loading && evals.length === 0 ? <p className="muted small">No evals yet.</p> : null}
+        {evals.length ? (
+          <div className="table-scroll">
+            <table className="table">
+              <caption className="sr-only">Recent evaluation runs</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Score</th>
+                  <th scope="col">Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {evals.map((evalRun) => (
+                  <tr key={evalRun.id}>
+                    <td>{evalRun.eval_sets?.name ?? "Eval"}</td>
+                    <td>{evalRun.status}</td>
+                    <td>{evalRun.aggregate_score?.toFixed(1) ?? "-"}</td>
+                    <td>{new Date(evalRun.created_at).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
       </section>
     </div>
   );
