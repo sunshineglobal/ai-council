@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { apiRoute } from "@/lib/api";
+import { apiRoute, parseJsonBody } from "@/lib/api";
 import { normalizeEmail, requireAdminProfile } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { inviteSchema } from "@/lib/validation";
@@ -17,7 +17,7 @@ export const GET = apiRoute(async () => {
 
 export const POST = apiRoute(async (request: Request) => {
   const profile = await requireAdminProfile();
-  const body = inviteSchema.parse(await request.json());
+  const body = inviteSchema.parse(await parseJsonBody(request));
   const admin = createSupabaseAdminClient();
   const { data, error } = await admin
     .from("invites")

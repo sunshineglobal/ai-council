@@ -1,4 +1,4 @@
-import { jsonError } from "@/lib/api";
+import { jsonError, parseJsonBody } from "@/lib/api";
 import { requireApiProfile } from "@/lib/auth";
 import { runCouncil } from "@/lib/council";
 import { isCouncilAbortError } from "@/lib/council/abort";
@@ -13,7 +13,7 @@ const HEARTBEAT_INTERVAL_MS = 15_000;
 export async function POST(request: Request) {
   try {
     const profile = await requireApiProfile();
-    const input = councilRunSchema.parse(await request.json());
+    const input = councilRunSchema.parse(await parseJsonBody(request));
     const encoder = new TextEncoder();
 
     console.info("[council.stream] starting run", {

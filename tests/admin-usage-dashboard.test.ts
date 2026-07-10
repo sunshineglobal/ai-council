@@ -4,6 +4,62 @@ import {
   formatRange,
   monthRange
 } from "@/components/admin-usage-dashboard/date-utils";
+import {
+  budgetDraftReducer,
+  initialBudgetDraftState
+} from "@/components/admin-usage-dashboard/budget-draft";
+
+describe("admin budget draft state", () => {
+  it("uses loaded values while the draft is clean", () => {
+    expect(budgetDraftReducer(initialBudgetDraftState, {
+      type: "loaded",
+      monthlyBudgetUsd: 25
+    })).toEqual({ value: "25", syncedValue: "25" });
+  });
+
+  it("preserves an in-progress edit when a refresh completes", () => {
+    const loaded = budgetDraftReducer(initialBudgetDraftState, {
+      type: "loaded",
+      monthlyBudgetUsd: 25
+    });
+    const edited = budgetDraftReducer(loaded, { type: "edit", value: "40" });
+
+    expect(budgetDraftReducer(edited, {
+      type: "loaded",
+      monthlyBudgetUsd: 30
+    })).toEqual({ value: "40", syncedValue: "30" });
+  });
+
+  it("does not replace an edit made while a save is in flight", () => {
+    const loaded = budgetDraftReducer(initialBudgetDraftState, {
+      type: "loaded",
+      monthlyBudgetUsd: 25
+    });
+    const submitted = budgetDraftReducer(loaded, { type: "edit", value: "40" });
+    const editedAgain = budgetDraftReducer(submitted, { type: "edit", value: "50" });
+    const saved = budgetDraftReducer(editedAgain, {
+      type: "saved",
+      monthlyBudgetUsd: 40,
+      submittedValue: "40"
+    });
+
+    expect(saved).toEqual({ value: "50", syncedValue: "40" });
+    expect(budgetDraftReducer(saved, {
+      type: "loaded",
+      monthlyBudgetUsd: 40
+    })).toEqual({ value: "50", syncedValue: "40" });
+  });
+
+  it("normalizes the saved value when the submitted draft is unchanged", () => {
+    const edited = budgetDraftReducer(initialBudgetDraftState, { type: "edit", value: "40.00" });
+
+    expect(budgetDraftReducer(edited, {
+      type: "saved",
+      monthlyBudgetUsd: 40,
+      submittedValue: "40.00"
+    })).toEqual({ value: "40", syncedValue: "40" });
+  });
+});
 
 describe("admin usage month formatting", () => {
   it("zero-pads months at both ends of the year", () => {

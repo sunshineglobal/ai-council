@@ -3,6 +3,17 @@ import { ZodError } from "zod";
 import { ApiError } from "@/lib/api-error";
 import { getErrorLog } from "@/lib/errors";
 
+export async function parseJsonBody<T = unknown>(request: Request): Promise<T> {
+  try {
+    return (await request.json()) as T;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new ApiError(400, "Invalid JSON request body.");
+    }
+    throw error;
+  }
+}
+
 export function jsonError(error: unknown) {
   if (error instanceof ApiError) {
     return NextResponse.json({ error: error.message }, { status: error.status });
@@ -10,10 +21,6 @@ export function jsonError(error: unknown) {
 
   if (error instanceof ZodError) {
     return NextResponse.json({ error: error.issues[0]?.message ?? "Invalid request." }, { status: 400 });
-  }
-
-  if (error instanceof SyntaxError) {
-    return NextResponse.json({ error: "Invalid JSON request body." }, { status: 400 });
   }
 
   const requestId = crypto.randomUUID();

@@ -1,7 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import type { FormEvent } from "react";
+import {
+  budgetDraftReducer,
+  initialBudgetDraftState
+} from "@/components/admin-usage-dashboard/budget-draft";
 import { currentMonthValue, monthRange } from "@/components/admin-usage-dashboard/date-utils";
 import type { AdminUsageResponse } from "@/lib/admin/usage-types";
 import { requestJson } from "@/lib/client-api";
@@ -11,7 +15,7 @@ type Notice = { kind: "error" | "success"; text: string };
 export function useAdminUsage() {
   const [month, setMonthState] = useState("");
   const [usage, setUsage] = useState<AdminUsageResponse | null>(null);
-  const [budgetInput, setBudgetInput] = useState("");
+  const [budgetDraft, dispatchBudgetDraft] = useReducer(budgetDraftReducer, initialBudgetDraftState);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -31,7 +35,7 @@ export function useAdminUsage() {
     void requestJson<AdminUsageResponse>(`/api/admin/usage?${params.toString()}`, { signal: controller.signal })
       .then((body) => {
         setUsage(body);
-        setBudgetInput(body.budget.monthlyBudgetUsd === null ? "" : String(body.budget.monthlyBudgetUsd));
+        dispatchBudgetDraft({ type: "loaded", monthlyBudgetUsd: body.budget.monthlyBudgetUsd });
       })
       .catch((error: unknown) => {
         if (error instanceof Error && error.name === "AbortError") return;
@@ -55,12 +59,17 @@ export function useAdminUsage() {
     setRefreshVersion((version) => version + 1);
   }
 
+  function setBudgetInput(value: string) {
+    dispatchBudgetDraft({ type: "edit", value });
+  }
+
   async function saveBudget(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true);
     setNotice(null);
 
-    const trimmed = budgetInput.trim();
+    const submittedValue = budgetDraft.value;
+    const trimmed = submittedValue.trim();
     const monthlyBudgetUsd = trimmed ? Number(trimmed) : null;
     if (monthlyBudgetUsd !== null && (!Number.isFinite(monthlyBudgetUsd) || monthlyBudgetUsd < 0)) {
       setNotice({ kind: "error", text: "Enter a valid non-negative monthly budget." });
@@ -69,10 +78,15 @@ export function useAdminUsage() {
     }
 
     try {
-      await requestJson<{ monthlyBudgetUsd: number | null }>("/api/admin/usage", {
+      const body = await requestJson<{ monthlyBudgetUsd: number | null }>("/api/admin/usage", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ monthlyBudgetUsd })
+      });
+      dispatchBudgetDraft({
+        type: "saved",
+        monthlyBudgetUsd: body.monthlyBudgetUsd,
+        submittedValue
       });
       setNotice({ kind: "success", text: "Budget saved." });
       setRefreshVersion((version) => version + 1);
@@ -84,7 +98,7 @@ export function useAdminUsage() {
   }
 
   return {
-    budgetInput,
+    budgetInput: budgetDraft.value,
     loading,
     month,
     notice,
