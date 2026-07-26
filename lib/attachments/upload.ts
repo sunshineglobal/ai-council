@@ -4,6 +4,7 @@ import { ATTACHMENT_BUCKET, MAX_ATTACHMENT_BYTES } from "@/lib/attachments/const
 import { deleteUserAttachments } from "@/lib/attachments/deletion";
 import {
   extractTextFromAttachment,
+  isTextLikeAttachment,
   normalizeAttachment,
   sanitizeAttachmentFilename
 } from "@/lib/attachments/text";
@@ -68,19 +69,22 @@ async function uploadUserAttachment(params: {
   if (params.file.size > MAX_ATTACHMENT_BYTES) {
     throw new ApiError(
       400,
-      `${params.file.name || "File"} is larger than ${Math.floor(MAX_ATTACHMENT_BYTES / (1024 * 1024))} MB.`
+      `${params.file.name || "File"} is larger than ${Math.ceil(MAX_ATTACHMENT_BYTES / 1_000_000)} MB.`
     );
   }
 
   const id = crypto.randomUUID();
   const filename = sanitizeAttachmentFilename(params.file.name || "attachment.txt");
   const contentType = params.file.type || "application/octet-stream";
+  if (!isTextLikeAttachment(filename, contentType)) {
+    throw new ApiError(415, `${filename} is not a supported text attachment.`);
+  }
   const objectPath = `${params.userId}/${id}/${filename}`;
   const bytes = Buffer.from(await params.file.arrayBuffer());
   const extraction = extractTextFromAttachment(bytes, filename, contentType);
 
   const { error: uploadError } = await params.admin.storage.from(ATTACHMENT_BUCKET).upload(objectPath, bytes, {
-    contentType,
+    contentType: "text/plain; charset=utf-8",
     upsert: false
   });
   if (uploadError) throw new Error(`File upload failed for ${filename}: ${uploadError.message}`);

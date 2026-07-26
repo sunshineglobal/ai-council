@@ -84,6 +84,8 @@ describe("usage cost helpers", () => {
 describe("usage budgets", () => {
   it("classifies budget state", () => {
     expect(budgetStatus(null, 10)).toBe("unset");
+    expect(budgetStatus(0, 0)).toBe("ok");
+    expect(budgetStatus(0, 0.01)).toBe("over");
     expect(budgetStatus(10, 7.99)).toBe("ok");
     expect(budgetStatus(10, 8)).toBe("warning");
     expect(budgetStatus(10, 10)).toBe("over");

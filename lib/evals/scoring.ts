@@ -1,6 +1,7 @@
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { z } from "zod";
 import { completeWithOpenRouter, type CompletionResult } from "@/lib/openrouter";
+import type { ModelPricing } from "@/lib/usage";
 
 const scoreOutputSchema = z.object({
   score: z.number().finite().min(0).max(100),
@@ -48,6 +49,8 @@ export async function scoreEvalAnswer(params: {
   rubric: string;
   answer: string;
   signal?: AbortSignal;
+  userId?: string;
+  pricing?: ModelPricing;
 }): Promise<ParsedEvalScore & { completion: CompletionResult }> {
   const completion = await completeWithOpenRouter({
     model: params.judgeModel,
@@ -55,6 +58,7 @@ export async function scoreEvalAnswer(params: {
     temperature: 0,
     maxTokens: 600,
     signal: params.signal,
+    budget: params.userId ? { userId: params.userId, pricing: params.pricing } : undefined,
     messages: buildEvalScoreMessages(params)
   });
 

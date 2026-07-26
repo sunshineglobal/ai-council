@@ -1,7 +1,17 @@
 import Link from "next/link";
+import type { KeyboardEvent, RefObject } from "react";
 import { History, Loader2, PanelLeft, Plus, Trash2 } from "lucide-react";
 import type { ChatSummary } from "@/components/council-workspace/types";
 import { formatDate } from "@/components/council-workspace/result-utils";
+
+const FOCUSABLE_SELECTOR = [
+  "button:not([disabled])",
+  "a[href]",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])"
+].join(",");
 
 export function ChatSidebar({
   chats,
@@ -9,6 +19,9 @@ export function ChatSidebar({
   deletingChatId,
   running,
   open,
+  modal,
+  sidebarRef,
+  initialFocusRef,
   onClose,
   onDelete
 }: {
@@ -17,16 +30,42 @@ export function ChatSidebar({
   deletingChatId: string | null;
   running: boolean;
   open: boolean;
+  modal: boolean;
+  sidebarRef: RefObject<HTMLElement>;
+  initialFocusRef: RefObject<HTMLButtonElement>;
   onClose: () => void;
   onDelete: (chatId: string) => void;
 }) {
+  function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (!modal || event.key !== "Tab") return;
+
+    const focusable = Array.from(
+      sidebarRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? []
+    );
+    if (!focusable.length) return;
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   return (
     <aside
+      ref={sidebarRef}
       aria-hidden={!open}
       aria-label="Chat history"
+      aria-modal={modal || undefined}
       className="sidebar"
       id="chat-history-sidebar"
       inert={!open}
+      role={modal ? "dialog" : undefined}
+      onKeyDown={handleKeyDown}
     >
       <div className="sidebar-top">
         <Link className="new-chat-button" href="/app" prefetch={false}>
@@ -34,6 +73,7 @@ export function ChatSidebar({
           New chat
         </Link>
         <button
+          ref={initialFocusRef}
           aria-controls="chat-history-sidebar"
           aria-expanded={open}
           aria-label="Hide chat history"

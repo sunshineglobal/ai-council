@@ -1,5 +1,6 @@
 import { ApiError } from "@/lib/api-error";
 import type { AdminUsageResponse, RecentCouncilRun } from "@/lib/admin/usage-types";
+import { getDefaultMonthlyBudgetUsd } from "@/lib/env";
 import { loadModelPricing } from "@/lib/model-pricing";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import {
@@ -91,7 +92,7 @@ export async function loadAdminUsage(params: {
 
   const usageRows = (usageResult.data ?? []) as UsageRow[];
   const aggregate = aggregateUsageRows(usageRows, pricingByModel);
-  const monthlyBudgetUsd = toNullableNumber(params.monthlyBudgetUsd);
+  const monthlyBudgetUsd = toNullableNumber(params.monthlyBudgetUsd) ?? getDefaultMonthlyBudgetUsd();
   const status = budgetStatus(monthlyBudgetUsd, aggregate.estimatedCost);
   const firecrawl = summarizeFirecrawl((researchResult.data ?? []) as ResearchRow[]);
 

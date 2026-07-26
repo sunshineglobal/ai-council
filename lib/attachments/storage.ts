@@ -1,5 +1,6 @@
 export {
   cleanupEphemeralAttachments,
+  cleanupExpiredEphemeralAttachments,
   deleteUserAttachment,
   deleteUserAttachments
 } from "@/lib/attachments/deletion";

@@ -1,22 +1,65 @@
 import { jsonError, parseJsonBody } from "@/lib/api";
+import { ApiError } from "@/lib/api-error";
 import { requireApiProfile } from "@/lib/auth";
 import { runCouncil } from "@/lib/council";
 import { isCouncilAbortError } from "@/lib/council/abort";
 import { getErrorLog } from "@/lib/errors";
+import { logEvent, reportError } from "@/lib/observability";
+import {
+  acquireOperationLease,
+  assertAllowedModels,
+  assertResearchAvailable,
+  claimIdempotencyKey,
+  enforceRateLimit,
+  type OperationLease
+} from "@/lib/production-guardrails";
+import { assertTrustedOrigin, requireIdempotencyKey } from "@/lib/request-security";
 import { councilRunSchema } from "@/lib/validation";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const HEARTBEAT_INTERVAL_MS = 15_000;
+const FUNCTION_DEADLINE_MS = 280_000;
 
 export async function POST(request: Request) {
+  const requestId =
+    request.headers.get("x-vercel-id") ??
+    request.headers.get("x-request-id") ??
+    crypto.randomUUID();
+  const requestStarted = Date.now();
+  let lease: OperationLease | undefined;
+  let streamStarted = false;
+
   try {
+    assertTrustedOrigin(request);
     const profile = await requireApiProfile();
     const input = councilRunSchema.parse(await parseJsonBody(request));
+    const idempotencyKey = requireIdempotencyKey(request);
+    assertAllowedModels([...input.models, input.judgeModel]);
+    assertResearchAvailable(input.researchEnabled);
+    await enforceRateLimit({
+      scope: "council-run",
+      key: profile.id,
+      limit: 12,
+      windowSeconds: 60 * 60,
+      message: "Council run limit reached. Try again later."
+    });
+    lease = await acquireOperationLease({
+      scope: "ai-operation",
+      key: profile.id,
+      ttlSeconds: 6 * 60,
+      conflictMessage: "Another AI operation is already running for this account."
+    });
+    await claimIdempotencyKey({
+      scope: "council-run",
+      userId: profile.id,
+      key: idempotencyKey
+    });
     const encoder = new TextEncoder();
 
-    console.info("[council.stream] starting run", {
+    logEvent("info", "Council stream starting", {
+      requestId,
       userId: profile.id,
       modelCount: input.models.length,
       judgeModel: input.judgeModel,
@@ -28,6 +71,7 @@ export async function POST(request: Request) {
     const runAbortController = new AbortController();
     let closed = false;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     let terminalEventSent = false;
 
     const abortRun = (reason?: unknown) => {
@@ -36,12 +80,21 @@ export async function POST(request: Request) {
     const abortFromRequest = () => abortRun(request.signal.reason);
     if (request.signal.aborted) abortFromRequest();
     else request.signal.addEventListener("abort", abortFromRequest, { once: true });
+    deadline = setTimeout(() => {
+      const timeoutError = new Error("Council run timed out before completion.");
+      timeoutError.name = "TimeoutError";
+      abortRun(timeoutError);
+    }, FUNCTION_DEADLINE_MS);
 
     const cleanup = () => {
       request.signal.removeEventListener("abort", abortFromRequest);
       if (heartbeat) {
         clearInterval(heartbeat);
         heartbeat = undefined;
+      }
+      if (deadline) {
+        clearTimeout(deadline);
+        deadline = undefined;
       }
     };
 
@@ -55,7 +108,10 @@ export async function POST(request: Request) {
           } catch (error) {
             closed = true;
             abortRun(error);
-            console.warn("[council.stream] could not send event to client", getErrorLog(error));
+            logEvent("warn", "Council stream send failed", {
+              requestId,
+              ...getErrorLog(error)
+            });
             return false;
           }
         };
@@ -76,18 +132,20 @@ export async function POST(request: Request) {
         })
           .catch((error) => {
             if (isCouncilAbortError(error, runAbortController.signal)) {
-              console.info("[council.stream] run stopped", {
+              logEvent("info", "Council run stopped", {
+                requestId,
                 userId: profile.id,
                 modelCount: input.models.length,
                 judgeModel: input.judgeModel
               });
               return;
             }
-            console.error("[council.stream] run failed", {
+            void reportError(error, {
+              requestId,
+              route: "/api/council/runs/stream",
               userId: profile.id,
               modelCount: input.models.length,
-              judgeModel: input.judgeModel,
-              ...getErrorLog(error)
+              judgeModel: input.judgeModel
             });
             if (!terminalEventSent) {
               terminalEventSent = true;
@@ -100,14 +158,18 @@ export async function POST(request: Request) {
               );
             }
           })
-          .finally(() => {
+          .finally(async () => {
             cleanup();
+            await lease?.release();
             if (closed) return;
             closed = true;
             try {
               controller.close();
             } catch (error) {
-              console.warn("[council.stream] could not close stream", getErrorLog(error));
+              logEvent("warn", "Council stream close failed", {
+                requestId,
+                ...getErrorLog(error)
+              });
             }
           });
       },
@@ -115,19 +177,38 @@ export async function POST(request: Request) {
         closed = true;
         abortRun(reason);
         cleanup();
+        void lease?.release();
       }
     });
 
+    streamStarted = true;
     return new Response(stream, {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
-        "X-Accel-Buffering": "no"
+        "X-Accel-Buffering": "no",
+        "X-Request-Id": requestId
       }
     });
   } catch (error) {
-    console.error("[council.stream] request failed before stream start", getErrorLog(error));
-    return jsonError(error);
+    if (lease && !streamStarted) await lease.release();
+    if (!(error instanceof ApiError) || error.status >= 500) {
+      await reportError(error, {
+        requestId,
+        route: "/api/council/runs/stream",
+        method: "POST",
+        durationMs: Date.now() - requestStarted
+      });
+    } else {
+      logEvent("warn", "Council stream request rejected", {
+        requestId,
+        status: error.status,
+        durationMs: Date.now() - requestStarted
+      });
+    }
+    const response = jsonError(error, requestId);
+    response.headers.set("X-Request-Id", requestId);
+    return response;
   }
 }

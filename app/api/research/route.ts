@@ -1,19 +1,20 @@
 import { NextResponse } from "next/server";
 import { apiRoute, parseJsonBody } from "@/lib/api";
-import { ApiError } from "@/lib/api-error";
 import { requireApiProfile } from "@/lib/auth";
 import { searchWithFirecrawl } from "@/lib/firecrawl";
-import { FixedWindowRateLimiter } from "@/lib/rate-limit";
+import { assertResearchAvailable, enforceRateLimit } from "@/lib/production-guardrails";
 import { researchSchema } from "@/lib/validation";
-
-const researchLimiter = new FixedWindowRateLimiter(20, 60 * 1000);
 
 export const POST = apiRoute(async (request: Request) => {
   const profile = await requireApiProfile();
-  const rateLimit = researchLimiter.consume(profile.id);
-  if (!rateLimit.allowed) {
-    throw new ApiError(429, `Research rate limit reached. Try again in ${rateLimit.retryAfterSeconds} seconds.`);
-  }
+  assertResearchAvailable();
+  await enforceRateLimit({
+    scope: "research",
+    key: profile.id,
+    limit: 10,
+    windowSeconds: 60 * 60,
+    message: "Research limit reached. Try again later."
+  });
   const body = researchSchema.parse(await parseJsonBody(request));
   const research = await searchWithFirecrawl(body.query, body.limit, request.signal, profile.id);
   return NextResponse.json({ research });

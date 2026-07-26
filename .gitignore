@@ -2,6 +2,7 @@
 .env*.local
 .next
 node_modules
+.npm-cache
 coverage
 playwright-report
 test-results

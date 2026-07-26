@@ -18,11 +18,6 @@ function initialAdminEmail(): string | undefined {
 
 export async function isInvitedEmail(email: string): Promise<{ allowed: boolean; role: UserRole }> {
   const normalized = normalizeEmail(email);
-  const initialAdmin = initialAdminEmail();
-  if (initialAdmin && normalized === initialAdmin) {
-    return { allowed: true, role: "admin" };
-  }
-
   const admin = createSupabaseAdminClient();
   const { data, error } = await admin
     .from("invites")
@@ -31,15 +26,29 @@ export async function isInvitedEmail(email: string): Promise<{ allowed: boolean;
     .maybeSingle();
 
   if (error) throw error;
-  return data ? { allowed: true, role: data.role as UserRole } : { allowed: false, role: "member" };
+  if (data) return { allowed: true, role: data.role as UserRole };
+
+  const initialAdmin = initialAdminEmail();
+  if (!initialAdmin || normalized !== initialAdmin) {
+    return { allowed: false, role: "member" };
+  }
+
+  const { count, error: profileCountError } = await admin
+    .from("profiles")
+    .select("id", { count: "exact", head: true });
+  if (profileCountError) throw profileCountError;
+
+  return count === 0
+    ? { allowed: true, role: "admin" }
+    : { allowed: false, role: "member" };
 }
 
-export async function sendMagicLink(email: string) {
+export async function sendMagicLink(email: string): Promise<boolean> {
   const normalized = normalizeEmail(email);
   const invite = await isInvitedEmail(normalized);
 
   if (!invite.allowed) {
-    throw new ApiError(403, "That email is not on the invite list.");
+    return false;
   }
 
   const supabase = await createSupabaseServerClient();
@@ -52,6 +61,7 @@ export async function sendMagicLink(email: string) {
   });
 
   if (error) throw new ApiError(400, error.message);
+  return true;
 }
 
 export async function ensureProfile(user: User): Promise<AuthProfile> {
@@ -60,12 +70,6 @@ export async function ensureProfile(user: User): Promise<AuthProfile> {
   }
 
   const email = normalizeEmail(user.email);
-  const invite = await isInvitedEmail(email);
-
-  if (!invite.allowed) {
-    throw new ApiError(403, "This account is not invited.");
-  }
-
   const admin = createSupabaseAdminClient();
   const { data: existingProfile, error: existingError } = await admin
     .from("profiles")
@@ -74,6 +78,22 @@ export async function ensureProfile(user: User): Promise<AuthProfile> {
     .maybeSingle();
 
   if (existingError) throw existingError;
+
+  const invite = await isInvitedEmail(email);
+  if (
+    !invite.allowed
+    && existingProfile
+    && existingProfile.id === user.id
+    && existingProfile.role === "admin"
+    && email === initialAdminEmail()
+  ) {
+    await persistInitialAdminInvite(user.id, email);
+    return existingProfile as AuthProfile;
+  }
+
+  if (!invite.allowed) {
+    throw new ApiError(403, "This account is not invited.");
+  }
 
   if (existingProfile) {
     if (existingProfile.id !== user.id) {
@@ -110,18 +130,38 @@ export async function ensureProfile(user: User): Promise<AuthProfile> {
 
   if (error) throw error;
 
-  await markInviteAccepted(email);
+  if (email === initialAdminEmail()) {
+    await persistInitialAdminInvite(user.id, email);
+  } else {
+    await markInviteAccepted(email);
+  }
 
   return data as AuthProfile;
 }
 
 async function markInviteAccepted(email: string) {
   const admin = createSupabaseAdminClient();
-  await admin
+  const { error } = await admin
     .from("invites")
     .update({ accepted_at: new Date().toISOString() })
     .eq("email", email)
     .is("accepted_at", null);
+  if (error) throw error;
+}
+
+async function persistInitialAdminInvite(userId: string, email: string) {
+  const { error } = await createSupabaseAdminClient()
+    .from("invites")
+    .upsert(
+      {
+        email,
+        role: "admin",
+        invited_by: userId,
+        accepted_at: new Date().toISOString()
+      },
+      { onConflict: "email" }
+    );
+  if (error) throw error;
 }
 
 export async function getCurrentProfile(): Promise<AuthProfile | null> {

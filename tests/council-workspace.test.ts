@@ -12,6 +12,11 @@ import {
   reconcileJudgeModel
 } from "@/components/council-workspace/model-selection";
 import { parseCouncilAnswer } from "@/components/council-workspace/result-utils";
+import {
+  initialResponsiveSidebarState,
+  isResponsiveSidebarOpen,
+  responsiveSidebarReducer
+} from "@/components/council-workspace/use-responsive-sidebar";
 import type { CritiqueResult, ModelOption } from "@/lib/types";
 
 const config = {
@@ -39,6 +44,34 @@ describe("workspace model defaults", () => {
     expect(reconcileJudgeModel("custom-judge", available)).toBe("custom-judge");
     expect(isDefaultCouncil([...DEFAULT_COUNCIL])).toBe(true);
     expect(isDefaultCouncil([...DEFAULT_COUNCIL].reverse())).toBe(false);
+  });
+});
+
+describe("responsive sidebar state", () => {
+  it("defaults open inline and closed when entering overlay mode", () => {
+    expect(isResponsiveSidebarOpen(initialResponsiveSidebarState)).toBe(true);
+
+    const overlay = responsiveSidebarReducer(initialResponsiveSidebarState, {
+      type: "viewport_changed",
+      overlay: true
+    });
+
+    expect(overlay.mode).toBe("overlay");
+    expect(isResponsiveSidebarOpen(overlay)).toBe(false);
+  });
+
+  it("preserves the desktop preference while closing each newly entered overlay", () => {
+    const collapsedInline = responsiveSidebarReducer(initialResponsiveSidebarState, { type: "close" });
+    const overlay = responsiveSidebarReducer(collapsedInline, { type: "viewport_changed", overlay: true });
+    const openOverlay = responsiveSidebarReducer(overlay, { type: "open" });
+    const repeatedOverlay = responsiveSidebarReducer(openOverlay, { type: "viewport_changed", overlay: true });
+    const inlineAgain = responsiveSidebarReducer(repeatedOverlay, { type: "viewport_changed", overlay: false });
+    const overlayAgain = responsiveSidebarReducer(inlineAgain, { type: "viewport_changed", overlay: true });
+
+    expect(isResponsiveSidebarOpen(openOverlay)).toBe(true);
+    expect(repeatedOverlay).toBe(openOverlay);
+    expect(isResponsiveSidebarOpen(inlineAgain)).toBe(false);
+    expect(isResponsiveSidebarOpen(overlayAgain)).toBe(false);
   });
 });
 

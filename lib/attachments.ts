@@ -1,12 +1,14 @@
 export {
   ATTACHMENT_BUCKET,
   MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENT_REQUEST_BYTES,
   MAX_ATTACHMENT_CONTEXT_CHARS,
   MAX_ATTACHMENT_CONTEXT_CHARS_PER_FILE,
   MAX_EXTRACTED_TEXT_CHARS
 } from "@/lib/attachments/constants";
 export {
   cleanupEphemeralAttachments,
+  cleanupExpiredEphemeralAttachments,
   deleteUserAttachment,
   deleteUserAttachments,
   ensureAttachmentBucket,

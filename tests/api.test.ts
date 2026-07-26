@@ -96,4 +96,17 @@ describe("apiRoute", () => {
     expect(body.error).toBe("The request could not be completed.");
     expect(body.requestId).toBeTruthy();
   });
+
+  it("stops reading JSON bodies that exceed the byte limit", async () => {
+    const request = new Request("http://localhost/api/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: "x".repeat(256 * 1024) })
+    });
+
+    await expect(parseJsonBody(request)).rejects.toMatchObject({
+      status: 413,
+      message: "JSON request body is too large."
+    });
+  });
 });

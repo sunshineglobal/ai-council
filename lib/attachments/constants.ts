@@ -1,5 +1,6 @@
 export const ATTACHMENT_BUCKET = "council-attachments";
-export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+export const MAX_ATTACHMENT_BYTES = 4_000_000;
+export const MAX_ATTACHMENT_REQUEST_BYTES = 4_250_000;
 export const MAX_EXTRACTED_TEXT_CHARS = 80_000;
 export const MAX_ATTACHMENT_CONTEXT_CHARS = 28_000;
 export const MAX_ATTACHMENT_CONTEXT_CHARS_PER_FILE = 12_000;

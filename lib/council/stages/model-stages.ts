@@ -6,6 +6,7 @@ import {
   revisionCache
 } from "@/lib/council/cache";
 import { emitCouncilEvent as emit, type CouncilRunContext } from "@/lib/council/context";
+import { COUNCIL_GENERATION_BY_STAGE } from "@/lib/council/generation";
 import {
   persistCritique,
   persistModelResponse,
@@ -41,12 +42,13 @@ export async function runInitialStage(
   return Promise.all(
     input.models.map(async (modelId) => {
       const messages = buildInitialMessages(input.prompt, researchContext, attachmentContext);
+      const generation = COUNCIL_GENERATION_BY_STAGE.initial_answer;
       const cacheKey = createCouncilCacheKey({
         userId: context.userId,
         stage: "initial_answer",
         modelId,
         messages,
-        generation: { temperature: 0.55, maxTokens: 1800 }
+        generation
       });
       const cached = canUsePrivateCouncilCache(input.saveHistory) ? initialAnswerCache.get(cacheKey) : undefined;
       if (cached) {
@@ -70,6 +72,7 @@ export async function runInitialStage(
         modelId,
         stage: "initial_answer",
         messages,
+        generation,
         saveHistory: input.saveHistory,
         runId,
         userId: context.userId,
@@ -116,12 +119,13 @@ export async function runCritiqueRound(params: {
         previousRounds: params.previousRounds,
         roundIndex: params.roundIndex
       });
+      const generation = COUNCIL_GENERATION_BY_STAGE.debate_critique;
       const cacheKey = createCouncilCacheKey({
         userId: params.context.userId,
         stage: "debate_critique",
         modelId,
         messages,
-        generation: { temperature: 0.45, maxTokens: 1400 }
+        generation
       });
       const cached = canUsePrivateCouncilCache(params.input.saveHistory) ? critiqueCache.get(cacheKey) : undefined;
       if (cached) {
@@ -144,6 +148,7 @@ export async function runCritiqueRound(params: {
         admin: params.admin,
         modelId,
         messages,
+        generation,
         saveHistory: params.input.saveHistory,
         roundIndex: params.roundIndex,
         runId: params.runId,
@@ -184,12 +189,13 @@ export async function runRevisionStage(params: {
         initialResponses: params.initialResponses,
         critiqueRounds: params.critiqueRounds
       });
+      const generation = COUNCIL_GENERATION_BY_STAGE.revision;
       const cacheKey = createCouncilCacheKey({
         userId: params.context.userId,
         stage: "revision",
         modelId,
         messages,
-        generation: { temperature: 0.35, maxTokens: 1800 }
+        generation
       });
       const cached = canUsePrivateCouncilCache(params.input.saveHistory) ? revisionCache.get(cacheKey) : undefined;
       if (cached) {
@@ -213,6 +219,7 @@ export async function runRevisionStage(params: {
         modelId,
         stage: "revision",
         messages,
+        generation,
         saveHistory: params.input.saveHistory,
         runId: params.runId,
         userId: params.context.userId,

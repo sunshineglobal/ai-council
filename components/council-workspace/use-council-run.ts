@@ -109,7 +109,10 @@ export function useCouncilRun({ initialThreadId }: { initialThreadId?: string })
     try {
       const response = await fetch("/api/council/runs/stream", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID()
+        },
         body: JSON.stringify({
           prompt: trimmedPrompt,
           models: config.models,

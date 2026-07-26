@@ -48,6 +48,8 @@ export async function searchWithFirecrawl(
   const cacheEnabled = process.env.NODE_ENV !== "test";
   const cached = cacheEnabled ? researchCache.get(cacheKey) : undefined;
   if (cached) return cached;
+  const timeoutSignal = AbortSignal.timeout(45_000);
+  const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 
   const response = await fetch(FIRECRAWL_SEARCH_URL, {
     method: "POST",
@@ -64,7 +66,7 @@ export async function searchWithFirecrawl(
         onlyMainContent: true
       }
     }),
-    signal
+    signal: requestSignal
   });
 
   if (!response.ok) {

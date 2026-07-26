@@ -48,8 +48,7 @@ const TEXT_MIME_TYPES = new Set([
   "application/xml",
   "application/x-ndjson",
   "application/yaml",
-  "application/x-yaml",
-  "image/svg+xml"
+  "application/x-yaml"
 ]);
 
 export function sanitizeAttachmentFilename(name: string): string {

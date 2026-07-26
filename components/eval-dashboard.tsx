@@ -83,7 +83,10 @@ export function EvalDashboard() {
     try {
       const body = await requestJson<{ aggregateScore: number }>("/api/evals/run", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID()
+        },
         body: JSON.stringify({
           name,
           rubric,

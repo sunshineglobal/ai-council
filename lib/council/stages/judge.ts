@@ -1,6 +1,7 @@
 import { isCouncilAbortError } from "@/lib/council/abort";
 import { canUsePrivateCouncilCache, createCouncilCacheKey, judgeCache } from "@/lib/council/cache";
 import { emitCouncilEvent as emit, type CouncilRunContext } from "@/lib/council/context";
+import { COUNCIL_GENERATION_BY_STAGE, withoutResponseFormat } from "@/lib/council/generation";
 import { parseJudgeOutput } from "@/lib/council/judge-output";
 import { persistJudge, type CouncilAdminClient } from "@/lib/council/persistence";
 import { buildJudgeMessages } from "@/lib/council/prompts";
@@ -51,12 +52,13 @@ export async function runJudgeStage(params: RunJudgeStageParams): Promise<JudgeR
     critiqueRounds: params.critiqueRounds,
     revisions: params.revisions
   });
+  const generation = COUNCIL_GENERATION_BY_STAGE.judge_synthesis;
   const cacheKey = createCouncilCacheKey({
     userId: params.context.userId,
     stage: "judge_synthesis",
     modelId: params.input.judgeModel,
     messages,
-    generation: { temperature: 0.2, maxTokens: 2200, responseFormat: "json_object" }
+    generation
   });
   const cached = canUsePrivateCouncilCache(params.input.saveHistory) ? judgeCache.get(cacheKey) : undefined;
   if (cached) {
@@ -83,11 +85,13 @@ export async function runJudgeStage(params: RunJudgeStageParams): Promise<JudgeR
       completion = await completeWithOpenRouter({
         model: params.input.judgeModel,
         messages,
-        temperature: 0.2,
-        maxTokens: 2200,
-        responseFormat: "json_object",
+        ...generation,
         cacheControl: true,
-        signal: params.context.signal
+        signal: params.context.signal,
+        budget: {
+          userId: params.context.userId,
+          pricing: params.pricingByModel[params.input.judgeModel]
+        }
       });
     } catch (error) {
       if (isCouncilAbortError(error, params.context.signal)) throw error;
@@ -99,10 +103,13 @@ export async function runJudgeStage(params: RunJudgeStageParams): Promise<JudgeR
       completion = await completeWithOpenRouter({
         model: params.input.judgeModel,
         messages,
-        temperature: 0.2,
-        maxTokens: 2200,
+        ...withoutResponseFormat(generation),
         cacheControl: true,
-        signal: params.context.signal
+        signal: params.context.signal,
+        budget: {
+          userId: params.context.userId,
+          pricing: params.pricingByModel[params.input.judgeModel]
+        }
       });
     }
   } catch (error) {

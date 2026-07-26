@@ -16,6 +16,7 @@ import {
 import { SettingsDialog } from "@/components/council-workspace/settings-dialog";
 import { useAttachments } from "@/components/council-workspace/use-attachments";
 import { useCouncilRun } from "@/components/council-workspace/use-council-run";
+import { useResponsiveSidebar } from "@/components/council-workspace/use-responsive-sidebar";
 import { useWorkspaceData } from "@/components/council-workspace/use-workspace-data";
 import { MAX_ATTACHMENT_COUNT } from "@/lib/limits";
 import type { CouncilRunResult } from "@/lib/types";
@@ -77,6 +78,7 @@ export function CouncilWorkspace({
   } = useAttachments();
   const {
     models,
+    researchAvailable,
     selectedModels,
     judgeModel,
     setJudgeModel,
@@ -95,13 +97,13 @@ export function CouncilWorkspace({
     onClearError: clearError
   });
   const [modelFilter, setModelFilter] = useState("");
-  const [researchEnabled, setResearchEnabled] = useState(true);
+  const [researchEnabled, setResearchEnabled] = useState(false);
   const [saveHistory, setSaveHistory] = useState(defaultSaveHistory);
   const [debateDepth, setDebateDepth] = useState(2);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const deferredModelFilter = useDeferredValue(modelFilter);
+  const sidebar = useResponsiveSidebar();
 
   useEffect(() => {
     clearUploadError();
@@ -160,33 +162,50 @@ export function CouncilWorkspace({
   }
 
   return (
-    <main className={`workspace ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
+    <main
+      className={[
+        "workspace",
+        sidebar.open ? "" : "sidebar-collapsed",
+        sidebar.overlayOpen ? "sidebar-overlay-open" : ""
+      ].filter(Boolean).join(" ")}
+    >
       <ChatSidebar
         chats={chats}
         currentThreadId={initialThreadId}
         deletingChatId={deletingChatId}
         running={running}
-        open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
+        open={sidebar.open}
+        modal={sidebar.overlayOpen}
+        sidebarRef={sidebar.sidebarRef}
+        initialFocusRef={sidebar.initialFocusRef}
+        onClose={sidebar.closeSidebar}
         onDelete={(chatId) => void deleteChat(chatId)}
       />
+
+      {sidebar.overlayOpen ? (
+        <button
+          aria-label="Close chat history"
+          className="sidebar-scrim"
+          type="button"
+          onClick={sidebar.closeSidebar}
+        />
+      ) : null}
 
       <section className="main-pane chat-pane">
         <header className="chat-header">
           <div className="chat-title-group">
-            {!sidebarOpen ? (
-              <button
-                aria-controls="chat-history-sidebar"
-                aria-expanded={sidebarOpen}
-                aria-label="Show chat history"
-                className="icon-button ghost"
-                type="button"
-                title="Show sidebar"
-                onClick={() => setSidebarOpen(true)}
-              >
-                <PanelLeft aria-hidden size={18} />
-              </button>
-            ) : null}
+            <button
+              ref={sidebar.triggerRef}
+              aria-controls="chat-history-sidebar"
+              aria-expanded={sidebar.open}
+              aria-label="Show chat history"
+              className="icon-button ghost sidebar-open-button"
+              type="button"
+              title="Show sidebar"
+              onClick={sidebar.openSidebar}
+            >
+              <PanelLeft aria-hidden size={18} />
+            </button>
             <div>
               <h1>{activeTitle}</h1>
               <div className="pill-row">
@@ -252,6 +271,7 @@ export function CouncilWorkspace({
           judgeModel={judgeModel}
           debateDepth={debateDepth}
           researchEnabled={researchEnabled}
+          researchAvailable={researchAvailable}
           saveHistory={saveHistory}
           modelFilter={modelFilter}
           running={running}

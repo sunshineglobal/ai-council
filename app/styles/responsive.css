@@ -1,3 +1,11 @@
+.sidebar-open-button {
+  display: none;
+}
+
+.workspace.sidebar-collapsed .sidebar-open-button {
+  display: inline-flex;
+}
+
 @media (max-width: 1180px) {
   .workspace {
     grid-template-columns: 240px minmax(0, 1fr) minmax(300px, 360px);
@@ -32,9 +40,12 @@
     left: 0;
     z-index: 35;
     width: min(310px, 86vw);
-    box-shadow: var(--shadow);
-    transform: translateX(0);
-    transition: transform 180ms ease;
+    visibility: hidden;
+    box-shadow: none;
+    transform: translateX(-105%);
+    transition:
+      transform 180ms ease,
+      visibility 0s linear 180ms;
   }
 
   .workspace.sidebar-collapsed .sidebar {
@@ -46,6 +57,31 @@
   .workspace.sidebar-collapsed .sidebar > * {
     opacity: 1;
     pointer-events: auto;
+  }
+
+  .workspace.sidebar-overlay-open .sidebar {
+    visibility: visible;
+    box-shadow: var(--shadow);
+    transform: translateX(0);
+    transition-delay: 0s;
+  }
+
+  .sidebar-open-button {
+    display: inline-flex;
+  }
+
+  .workspace.sidebar-overlay-open .sidebar-open-button {
+    display: none;
+  }
+
+  .sidebar-scrim {
+    position: fixed;
+    inset: var(--topbar-height) 0 0;
+    z-index: 34;
+    border: 0;
+    background: rgba(27, 28, 29, 0.28);
+    padding: 0;
+    cursor: pointer;
   }
 
   .chat-title-group h1 {

@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import type { ChangeEvent } from "react";
 import { readResponseError } from "@/components/council-workspace/request-utils";
+import { MAX_ATTACHMENT_BYTES } from "@/lib/attachments/constants";
 import { requestJson } from "@/lib/client-api";
 import { MAX_ATTACHMENT_COUNT } from "@/lib/limits";
 import type { CouncilAttachment } from "@/lib/types";
@@ -21,6 +22,10 @@ export function useAttachments() {
     if (!selectedFiles.length) return;
     if (attachments.length + selectedFiles.length > MAX_ATTACHMENT_COUNT) {
       setUploadError(`Attach at most ${MAX_ATTACHMENT_COUNT} files.`);
+      return;
+    }
+    if (selectedFiles.reduce((total, file) => total + file.size, 0) > MAX_ATTACHMENT_BYTES) {
+      setUploadError("Selected files exceed the combined 4 MB upload limit.");
       return;
     }
 

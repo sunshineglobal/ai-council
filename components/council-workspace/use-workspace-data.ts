@@ -31,6 +31,7 @@ export function useWorkspaceData({
 }) {
   const router = useRouter();
   const [models, setModels] = useState<ModelOption[]>([]);
+  const [researchAvailable, setResearchAvailable] = useState(false);
   const [selectedModels, setSelectedModels] = useState<string[]>([...DEFAULT_COUNCIL]);
   const [judgeModel, setJudgeModel] = useState(DEFAULT_JUDGE);
   const [chats, setChats] = useState<ChatSummary[]>([]);
@@ -42,8 +43,9 @@ export function useWorkspaceData({
 
   const loadModels = useCallback(async (signal?: AbortSignal) => {
     try {
-      const body = await requestJson<{ models: ModelOption[] }>("/api/models", { signal });
+      const body = await requestJson<{ models: ModelOption[]; researchAvailable: boolean }>("/api/models", { signal });
       setModels(body.models);
+      setResearchAvailable(body.researchAvailable);
       setSelectedModels((current) => reconcileCouncilModels(current, body.models));
       setJudgeModel((current) => reconcileJudgeModel(current, body.models));
     } catch (error) {
@@ -153,6 +155,7 @@ export function useWorkspaceData({
 
   return {
     models,
+    researchAvailable,
     selectedModels,
     judgeModel,
     setJudgeModel,

@@ -140,7 +140,8 @@ export function aggregateUsageRows(rows: UsageRow[], pricingByModel: ModelPricin
 }
 
 export function budgetStatus(monthlyBudgetUsd: number | null | undefined, estimatedCost: number): BudgetStatus {
-  if (monthlyBudgetUsd === null || monthlyBudgetUsd === undefined || monthlyBudgetUsd <= 0) return "unset";
+  if (monthlyBudgetUsd === null || monthlyBudgetUsd === undefined) return "unset";
+  if (monthlyBudgetUsd <= 0) return estimatedCost > 0 ? "over" : "ok";
   const ratio = estimatedCost / monthlyBudgetUsd;
   if (ratio >= 1) return "over";
   if (ratio >= 0.8) return "warning";

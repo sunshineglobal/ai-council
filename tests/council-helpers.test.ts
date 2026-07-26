@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { canUsePrivateCouncilCache, createCouncilCacheKey } from "@/lib/council/cache";
+import { COUNCIL_GENERATION_BY_STAGE, withoutResponseFormat } from "@/lib/council/generation";
 import { JudgeOutputValidationError, parseJudgeOutput } from "@/lib/council/judge-output";
 import { buildCritiqueMessages, buildInitialMessages, buildJudgePrompt } from "@/lib/council/prompts";
 import type { CritiqueResult, StageResult } from "@/lib/types";
@@ -26,6 +27,24 @@ describe("council cache keys", () => {
   it("does not cache ephemeral runs", () => {
     expect(canUsePrivateCouncilCache(false)).toBe(false);
     expect(canUsePrivateCouncilCache(true)).toBe(true);
+  });
+});
+
+describe("council generation config", () => {
+  it("preserves the settings for every model-backed stage", () => {
+    expect(COUNCIL_GENERATION_BY_STAGE).toEqual({
+      initial_answer: { temperature: 0.55, maxTokens: 1800 },
+      debate_critique: { temperature: 0.45, maxTokens: 1400 },
+      revision: { temperature: 0.35, maxTokens: 1800 },
+      judge_synthesis: { temperature: 0.2, maxTokens: 2200, responseFormat: "json_object" }
+    });
+  });
+
+  it("keeps the judge fallback settings aligned while dropping JSON mode", () => {
+    const judgeGeneration = COUNCIL_GENERATION_BY_STAGE.judge_synthesis;
+
+    expect(withoutResponseFormat(judgeGeneration)).toEqual({ temperature: 0.2, maxTokens: 2200 });
+    expect(judgeGeneration.responseFormat).toBe("json_object");
   });
 });
 
@@ -123,7 +142,7 @@ function cacheInput(userId: string, prompt: string) {
     stage: "initial_answer" as const,
     modelId: "model-a",
     messages: [{ role: "user" as const, content: prompt }],
-    generation: { temperature: 0.55, maxTokens: 1800 }
+    generation: COUNCIL_GENERATION_BY_STAGE.initial_answer
   };
 }
 

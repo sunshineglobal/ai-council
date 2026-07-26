@@ -128,6 +128,17 @@ export async function touchCouncilThread(
   assertSupabaseOk("updating chat thread timestamp", error);
 }
 
+export async function insertDebateRound(
+  admin: CouncilAdminClient,
+  params: { runId: string; roundIndex: number }
+): Promise<void> {
+  const { error } = await admin.from("debate_rounds").insert({
+    run_id: params.runId,
+    round_index: params.roundIndex
+  });
+  assertSupabaseOk(`creating debate round ${params.roundIndex}`, error);
+}
+
 export async function persistModelResponse(
   admin: CouncilAdminClient,
   runId: string,

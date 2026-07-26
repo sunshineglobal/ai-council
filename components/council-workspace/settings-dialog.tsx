@@ -23,6 +23,7 @@ export function SettingsDialog({
   judgeModel,
   debateDepth,
   researchEnabled,
+  researchAvailable,
   saveHistory,
   modelFilter,
   running,
@@ -41,6 +42,7 @@ export function SettingsDialog({
   judgeModel: string;
   debateDepth: number;
   researchEnabled: boolean;
+  researchAvailable: boolean;
   saveHistory: boolean;
   modelFilter: string;
   running: boolean;
@@ -176,12 +178,15 @@ export function SettingsDialog({
             <label className="switch-row">
               <input
                 checked={researchEnabled}
-                disabled={running}
+                disabled={running || !researchAvailable}
                 type="checkbox"
                 onChange={(event) => onResearchEnabledChange(event.target.checked)}
               />
               <span>Firecrawl research</span>
             </label>
+            {!researchAvailable ? (
+              <p className="muted small">Research is unavailable until Firecrawl is configured.</p>
+            ) : null}
             <label className="switch-row">
               <input
                 checked={saveHistory}

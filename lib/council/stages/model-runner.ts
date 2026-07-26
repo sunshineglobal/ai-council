@@ -1,6 +1,7 @@
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { isCouncilAbortError } from "@/lib/council/abort";
 import { emitCouncilEvent as emit, type CouncilRunContext } from "@/lib/council/context";
+import type { CouncilGenerationConfig } from "@/lib/council/generation";
 import {
   persistCritique,
   persistModelResponse,
@@ -25,8 +26,7 @@ async function runModelCompletion<Result extends ModelCompletionResult>(params: 
   modelId: string;
   stage: CouncilStage;
   messages: ChatCompletionMessageParam[];
-  temperature: number;
-  maxTokens: number;
+  generation: CouncilGenerationConfig;
   runId: string;
   userId: string;
   usageEvents: UsageEvent[];
@@ -45,10 +45,13 @@ async function runModelCompletion<Result extends ModelCompletionResult>(params: 
     completion = await completeWithOpenRouter({
       model: params.modelId,
       messages: params.messages,
-      temperature: params.temperature,
-      maxTokens: params.maxTokens,
+      ...params.generation,
       cacheControl: true,
-      signal: params.context.signal
+      signal: params.context.signal,
+      budget: {
+        userId: params.userId,
+        pricing: params.pricingByModel[params.modelId]
+      }
     });
   } catch (error) {
     if (isCouncilAbortError(error, params.context.signal)) throw error;
@@ -84,6 +87,7 @@ export async function callModelStage(params: {
   modelId: string;
   stage: "initial_answer" | "revision";
   messages: ChatCompletionMessageParam[];
+  generation: CouncilGenerationConfig;
   saveHistory: boolean;
   runId: string;
   userId: string;
@@ -96,8 +100,7 @@ export async function callModelStage(params: {
     modelId: params.modelId,
     stage: params.stage,
     messages: params.messages,
-    temperature: params.stage === "initial_answer" ? 0.55 : 0.35,
-    maxTokens: 1800,
+    generation: params.generation,
     runId: params.runId,
     userId: params.userId,
     usageEvents: params.usageEvents,
@@ -137,6 +140,7 @@ export async function callCritiqueStage(params: {
   admin: CouncilAdminClient;
   modelId: string;
   messages: ChatCompletionMessageParam[];
+  generation: CouncilGenerationConfig;
   saveHistory: boolean;
   roundIndex: number;
   runId: string;
@@ -150,8 +154,7 @@ export async function callCritiqueStage(params: {
     modelId: params.modelId,
     stage: "debate_critique",
     messages: params.messages,
-    temperature: 0.45,
-    maxTokens: 1400,
+    generation: params.generation,
     runId: params.runId,
     userId: params.userId,
     usageEvents: params.usageEvents,

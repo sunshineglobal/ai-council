@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { TtlCache } from "@/lib/cache";
+import type { CouncilGenerationConfig } from "@/lib/council/generation";
 import type { CouncilStage, CritiqueResult, JudgeResult, StageResult } from "@/lib/types";
 
 const PRIVATE_OUTPUT_CACHE_VERSION = "council-private-output-v2";
@@ -19,11 +20,7 @@ export function createCouncilCacheKey(params: {
   stage: CouncilStage;
   modelId: string;
   messages: ChatCompletionMessageParam[];
-  generation: {
-    temperature: number;
-    maxTokens: number;
-    responseFormat?: "json_object";
-  };
+  generation: CouncilGenerationConfig;
 }): string {
   const serialized = JSON.stringify({
     version: PRIVATE_OUTPUT_CACHE_VERSION,

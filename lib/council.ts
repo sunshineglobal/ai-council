@@ -9,9 +9,9 @@ import { isCouncilAbortError, throwIfCouncilAborted } from "@/lib/council/abort"
 import { emitCouncilEvent as emit, type CouncilRunContext } from "@/lib/council/context";
 import { validateCouncilInput } from "@/lib/council/input";
 import {
-  assertSupabaseOk,
   createCouncilThread,
   deleteThreadIfOrphaned,
+  insertDebateRound,
   insertCouncilRun,
   markCouncilRunComplete,
   markCouncilRunFailed,
@@ -30,6 +30,7 @@ import { loadCouncilPricing } from "@/lib/council/usage";
 import { getErrorLog } from "@/lib/errors";
 import { compactText } from "@/lib/format";
 import { buildResearchContext } from "@/lib/firecrawl";
+import { assertModelPricingAvailable } from "@/lib/production-guardrails";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { summarizeUsage } from "@/lib/token-usage";
 import type {
@@ -57,6 +58,7 @@ export async function runCouncil(input: CouncilRunInput, context: CouncilRunCont
     throwIfCouncilAborted(context.signal);
 
     const pricingByModel = await loadCouncilPricing();
+    assertModelPricingAvailable([...input.models, input.judgeModel], pricingByModel);
     throwIfCouncilAborted(context.signal);
     attachments = await loadUserAttachments(admin, context.userId, input.attachmentIds ?? []);
     const attachmentContext = buildAttachmentContext(attachments);
@@ -123,8 +125,7 @@ export async function runCouncil(input: CouncilRunInput, context: CouncilRunCont
 
     const critiqueRounds: CritiqueResult[][] = [];
     for (let roundIndex = 1; roundIndex <= input.debateDepth; roundIndex += 1) {
-      const { error } = await admin.from("debate_rounds").insert({ run_id: runId, round_index: roundIndex });
-      assertSupabaseOk(`creating debate round ${roundIndex}`, error);
+      await insertDebateRound(admin, { runId, roundIndex });
       const round = await runCritiqueRound({
         admin,
         input,
@@ -215,7 +216,11 @@ export async function runCouncil(input: CouncilRunInput, context: CouncilRunCont
     return result;
   } catch (error) {
     const aborted = isCouncilAbortError(error, context.signal);
-    const message = aborted ? "Council run stopped." : "Council run failed.";
+    const message = aborted
+      ? context.signal?.reason instanceof Error && context.signal.reason.name === "TimeoutError"
+        ? "Council run timed out before completion."
+        : "Council run stopped."
+      : "Council run failed.";
     if (aborted) {
       console.info("[council] run stopped", { runId, userId: context.userId });
     } else {
