@@ -1,7 +1,7 @@
 "use client";
 
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { PanelLeft, Settings2 } from "lucide-react";
+import { PanelLeft, PanelRight, Settings2 } from "lucide-react";
 import { ActivityPanel } from "@/components/council-workspace/activity-panel";
 import { ChatSidebar } from "@/components/council-workspace/chat-sidebar";
 import { Composer } from "@/components/council-workspace/composer";
@@ -45,6 +45,8 @@ const FILE_ACCEPT = [
   "application/json"
 ].join(",");
 
+const ACTIVITY_MEDIA = "(max-width: 980px)";
+
 export function CouncilWorkspace({
   defaultSaveHistory,
   initialThreadId
@@ -72,10 +74,26 @@ export function CouncilWorkspace({
     uploading,
     uploadError,
     uploadFiles,
+    uploadFileList,
     removeAttachment,
     clearAttachments,
     clearUploadError
   } = useAttachments();
+  const [modelFilter, setModelFilter] = useState("");
+  const [researchEnabled, setResearchEnabled] = useState(false);
+  const [saveHistory, setSaveHistory] = useState(defaultSaveHistory);
+  const [savingPreference, setSavingPreference] = useState(false);
+  const [debateDepth, setDebateDepth] = useState(2);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(true);
+  const [activityNarrow, setActivityNarrow] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const skipTitleBlurRef = useRef(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const deferredModelFilter = useDeferredValue(modelFilter);
+  const sidebar = useResponsiveSidebar();
   const {
     models,
     researchAvailable,
@@ -83,32 +101,86 @@ export function CouncilWorkspace({
     judgeModel,
     setJudgeModel,
     chats,
+    chatsCursor,
+    loadingMoreChats,
     deletingChatId,
+    renamingChatId,
     thread,
+    olderRunsCursor,
+    loadingOlderRuns,
     threadLoading,
     loadChats,
+    loadMoreChats,
     loadThread,
+    loadOlderRuns,
     deleteChat,
+    renameChat,
     toggleModel
   } = useWorkspaceData({
     initialThreadId,
     running,
+    debateDepth,
+    researchEnabled,
+    onDebateDepthChange: setDebateDepth,
+    onResearchEnabledChange: setResearchEnabled,
     onError: reportError,
     onClearError: clearError
   });
-  const [modelFilter, setModelFilter] = useState("");
-  const [researchEnabled, setResearchEnabled] = useState(false);
-  const [saveHistory, setSaveHistory] = useState(defaultSaveHistory);
-  const [debateDepth, setDebateDepth] = useState(2);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const deferredModelFilter = useDeferredValue(modelFilter);
-  const sidebar = useResponsiveSidebar();
 
   useEffect(() => {
     clearUploadError();
     setSettingsOpen(false);
+    setEditingTitle(false);
   }, [clearUploadError, initialThreadId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(ACTIVITY_MEDIA);
+    let wasNarrow = media.matches;
+    setActivityNarrow(wasNarrow);
+    setActivityOpen(!wasNarrow);
+    const sync = () => {
+      const narrow = media.matches;
+      setActivityNarrow(narrow);
+      if (narrow && !wasNarrow) setActivityOpen(false);
+      if (!narrow && wasNarrow) setActivityOpen(true);
+      wasNarrow = narrow;
+    };
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => {
+    if (running) setActivityOpen(true);
+  }, [running]);
+
+  useEffect(() => {
+    if (!selectedRunId) return;
+    setActivityOpen(true);
+  }, [selectedRunId]);
+
+  async function handleSaveHistoryChange(enabled: boolean) {
+    const previous = saveHistory;
+    setSaveHistory(enabled);
+    setSavingPreference(true);
+    clearError();
+    try {
+      const response = await fetch("/api/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ defaultSaveHistory: enabled })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error || "Could not save preference.");
+      }
+    } catch (error) {
+      setSaveHistory(previous);
+      reportError(error instanceof Error ? error.message : "Could not save preference.");
+    } finally {
+      setSavingPreference(false);
+    }
+  }
 
   const filteredModels = useMemo(() => {
     const query = deferredModelFilter.trim().toLowerCase();
@@ -136,10 +208,30 @@ export function CouncilWorkspace({
     || "AI Council";
   const canSubmit = Boolean(prompt.trim() && selectedModels.length > 0 && judgeModel && !running && !uploading);
   const canAttachMore = attachments.length < MAX_ATTACHMENT_COUNT && !running && !uploading;
+  const canRenameTitle = Boolean(initialThreadId && thread?.thread.id === initialThreadId);
   const selectedModelLabels = useMemo(
     () => selectedModels.map((modelId) => ({ id: modelId, label: modelLabel(models, modelId) })),
     [models, selectedModels]
   );
+
+  function beginTitleEdit() {
+    if (!canRenameTitle || running) return;
+    skipTitleBlurRef.current = false;
+    setTitleDraft(thread?.thread.title || activeTitle);
+    setEditingTitle(true);
+    window.requestAnimationFrame(() => titleInputRef.current?.focus());
+  }
+
+  async function commitTitleEdit() {
+    if (!initialThreadId || !editingTitle) return;
+    const next = titleDraft.trim();
+    if (!next || next === thread?.thread.title) {
+      setEditingTitle(false);
+      return;
+    }
+    const ok = await renameChat(initialThreadId, next);
+    if (ok) setEditingTitle(false);
+  }
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -161,18 +253,25 @@ export function CouncilWorkspace({
     });
   }
 
+  function handleShowDetails(runId: string) {
+    setSelectedRunId(runId);
+    setActivityOpen(true);
+  }
+
   return (
     <main
       className={[
         "workspace",
         sidebar.open ? "" : "sidebar-collapsed",
-        sidebar.overlayOpen ? "sidebar-overlay-open" : ""
+        sidebar.overlayOpen ? "sidebar-overlay-open" : "",
+        activityOpen ? "" : "activity-collapsed"
       ].filter(Boolean).join(" ")}
     >
       <ChatSidebar
         chats={chats}
         currentThreadId={initialThreadId}
         deletingChatId={deletingChatId}
+        renamingChatId={renamingChatId}
         running={running}
         open={sidebar.open}
         modal={sidebar.overlayOpen}
@@ -180,6 +279,10 @@ export function CouncilWorkspace({
         initialFocusRef={sidebar.initialFocusRef}
         onClose={sidebar.closeSidebar}
         onDelete={(chatId) => void deleteChat(chatId)}
+        onRename={renameChat}
+        hasMoreChats={Boolean(chatsCursor)}
+        loadingMoreChats={loadingMoreChats}
+        onLoadMoreChats={() => void loadMoreChats()}
       />
 
       {sidebar.overlayOpen ? (
@@ -207,7 +310,47 @@ export function CouncilWorkspace({
               <PanelLeft aria-hidden size={18} />
             </button>
             <div>
-              <h1>{activeTitle}</h1>
+              {editingTitle ? (
+                <input
+                  ref={titleInputRef}
+                  aria-label="Chat title"
+                  className="chat-title-input"
+                  maxLength={120}
+                  value={titleDraft}
+                  onBlur={() => {
+                    if (skipTitleBlurRef.current) {
+                      skipTitleBlurRef.current = false;
+                      return;
+                    }
+                    void commitTitleEdit();
+                  }}
+                  onChange={(event) => setTitleDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void commitTitleEdit();
+                    }
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      skipTitleBlurRef.current = true;
+                      setEditingTitle(false);
+                    }
+                  }}
+                />
+              ) : (
+                <h1>
+                  {canRenameTitle ? (
+                    <button
+                      className="chat-title-button"
+                      type="button"
+                      title="Rename chat"
+                      onClick={beginTitleEdit}
+                    >
+                      {activeTitle}
+                    </button>
+                  ) : activeTitle}
+                </h1>
+              )}
               <div className="pill-row">
                 <span className="pill">{selectedModels.length} models</span>
                 <span className="pill">{debateDepth} rounds</span>
@@ -216,16 +359,31 @@ export function CouncilWorkspace({
               </div>
             </div>
           </div>
-          <button
-            aria-controls="council-settings-dialog"
-            aria-expanded={settingsOpen}
-            className="button subtle"
-            type="button"
-            onClick={() => setSettingsOpen(true)}
-          >
-            <Settings2 aria-hidden size={16} />
-            Settings
-          </button>
+          <div className="chat-header-actions">
+            {!activityOpen ? (
+              <button
+                aria-controls="council-activity-panel"
+                aria-expanded={false}
+                aria-label="Show run details"
+                className="button subtle"
+                type="button"
+                onClick={() => setActivityOpen(true)}
+              >
+                <PanelRight aria-hidden size={16} />
+                Details
+              </button>
+            ) : null}
+            <button
+              aria-controls="council-settings-dialog"
+              aria-expanded={settingsOpen}
+              className="button subtle"
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+            >
+              <Settings2 aria-hidden size={16} />
+              Settings
+            </button>
+          </div>
         </header>
 
         <Conversation
@@ -233,11 +391,14 @@ export function CouncilWorkspace({
           threadLoading={threadLoading}
           run={run}
           running={running}
+          hasOlderRuns={Boolean(olderRunsCursor)}
+          loadingOlderRuns={loadingOlderRuns}
+          onLoadOlderRuns={() => void loadOlderRuns()}
           onPickPrompt={(suggestion) => {
             setPrompt(suggestion);
             window.requestAnimationFrame(() => promptRef.current?.focus());
           }}
-          onShowDetails={setSelectedRunId}
+          onShowDetails={handleShowDetails}
         />
 
         <Composer
@@ -256,6 +417,7 @@ export function CouncilWorkspace({
           fileAccept={FILE_ACCEPT}
           onPromptChange={setPrompt}
           onUploadFiles={(inputEvent) => void uploadFiles(inputEvent, saveHistory)}
+          onUploadFileList={(files) => void uploadFileList(files, saveHistory)}
           onRemoveAttachment={(fileId) => void removeAttachment(fileId)}
           onStop={stop}
           onSubmit={handleSubmit}
@@ -278,10 +440,20 @@ export function CouncilWorkspace({
           onJudgeModelChange={setJudgeModel}
           onDebateDepthChange={setDebateDepth}
           onResearchEnabledChange={setResearchEnabled}
-          onSaveHistoryChange={setSaveHistory}
+          onSaveHistoryChange={(enabled) => void handleSaveHistoryChange(enabled)}
+          saveHistorySaving={savingPreference}
           onModelFilterChange={setModelFilter}
           onToggleModel={toggleModel}
           onClose={() => setSettingsOpen(false)}
+        />
+      ) : null}
+
+      {activityNarrow && activityOpen ? (
+        <button
+          aria-label="Close run details"
+          className="activity-scrim"
+          type="button"
+          onClick={() => setActivityOpen(false)}
         />
       ) : null}
 
@@ -290,7 +462,10 @@ export function CouncilWorkspace({
         models={models}
         running={running}
         statusLog={run.statusLog}
+        open={activityOpen}
+        modal={activityNarrow && activityOpen}
         activityEndRef={activityEndRef}
+        onClose={() => setActivityOpen(false)}
       />
     </main>
   );

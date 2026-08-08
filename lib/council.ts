@@ -7,6 +7,7 @@ import {
 } from "@/lib/attachments";
 import { isCouncilAbortError, throwIfCouncilAborted } from "@/lib/council/abort";
 import { emitCouncilEvent as emit, type CouncilRunContext } from "@/lib/council/context";
+import { toUserFacingCouncilError } from "@/lib/council/errors";
 import { validateCouncilInput } from "@/lib/council/input";
 import {
   createCouncilThread,
@@ -91,7 +92,7 @@ export async function runCouncil(input: CouncilRunInput, context: CouncilRunCont
       });
     }
 
-    await emit(context, { type: "started", runId });
+    await emit(context, { type: "started", runId, threadId });
     if (attachments.length) {
       await emit(context, {
         type: "stage",
@@ -216,11 +217,7 @@ export async function runCouncil(input: CouncilRunInput, context: CouncilRunCont
     return result;
   } catch (error) {
     const aborted = isCouncilAbortError(error, context.signal);
-    const message = aborted
-      ? context.signal?.reason instanceof Error && context.signal.reason.name === "TimeoutError"
-        ? "Council run timed out before completion."
-        : "Council run stopped."
-      : "Council run failed.";
+    const message = toUserFacingCouncilError(error, context.signal);
     if (aborted) {
       console.info("[council] run stopped", { runId, userId: context.userId });
     } else {
@@ -236,7 +233,8 @@ export async function runCouncil(input: CouncilRunInput, context: CouncilRunCont
         await markCouncilRunFailed(admin, {
           runId,
           userId: context.userId,
-          latencyMs: Date.now() - started
+          latencyMs: Date.now() - started,
+          errorMessage: message
         });
       } catch (updateError) {
         console.error("[council] could not mark run failed", {
@@ -260,7 +258,12 @@ export async function runCouncil(input: CouncilRunInput, context: CouncilRunCont
       }
     }
 
-    await emit(context, { type: "error", message });
+    await emit(context, {
+      type: "error",
+      message,
+      runId: runCreated ? runId : undefined,
+      threadId: threadId ?? newlyCreatedThreadId
+    });
     throw error;
   } finally {
     if (admin && !input.saveHistory && attachments.length) {

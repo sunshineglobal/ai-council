@@ -60,20 +60,100 @@ export function findUnreferencedAttachmentIds(
   return candidateAttachmentIds.filter((fileId) => !stillReferenced.has(fileId));
 }
 
-export async function listUserChats(admin: ChatAdminClient, userId: string) {
-  const { data, error } = await admin
+export type ListUserChatsOptions = {
+  limit?: number;
+  cursor?: string | null;
+};
+
+export type ChatListPage = {
+  chats: Array<{ id: string; title: string; created_at?: string; updated_at: string }>;
+  nextCursor: string | null;
+};
+
+export function encodeChatCursor(chat: { updated_at: string; id: string }): string {
+  return Buffer.from(JSON.stringify({ updated_at: chat.updated_at, id: chat.id }), "utf8").toString("base64url");
+}
+
+export function decodeChatCursor(cursor: string): { updated_at: string; id: string } | null {
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
+      updated_at?: unknown;
+      id?: unknown;
+    };
+    if (typeof parsed.updated_at !== "string" || typeof parsed.id !== "string") return null;
+    return { updated_at: parsed.updated_at, id: parsed.id };
+  } catch {
+    return null;
+  }
+}
+
+export async function listUserChats(
+  admin: ChatAdminClient,
+  userId: string,
+  options: ListUserChatsOptions = {}
+): Promise<ChatListPage> {
+  const limit = Math.min(Math.max(options.limit ?? 40, 1), 100);
+  let query = admin
     .from("chat_threads")
     .select("id,title,created_at,updated_at")
     .eq("user_id", userId)
     .eq("is_ephemeral", false)
     .order("updated_at", { ascending: false })
-    .limit(40);
+    .order("id", { ascending: false })
+    .limit(limit + 1);
 
+  if (options.cursor) {
+    const decoded = decodeChatCursor(options.cursor);
+    if (!decoded) throw new ApiError(400, "Invalid chat cursor.");
+    const updatedAt = JSON.stringify(decoded.updated_at);
+    const id = JSON.stringify(decoded.id);
+    query = query.or(
+      `updated_at.lt.${updatedAt},and(updated_at.eq.${updatedAt},id.lt.${id})`
+    );
+  }
+
+  const { data, error } = await query;
   if (error) throw error;
-  return data ?? [];
+
+  const rows = data ?? [];
+  const hasMore = rows.length > limit;
+  const chats = hasMore ? rows.slice(0, limit) : rows;
+  const last = chats.at(-1);
+  return {
+    chats,
+    nextCursor: hasMore && last ? encodeChatCursor(last) : null
+  };
 }
 
-export async function loadUserChatDetails(admin: ChatAdminClient, userId: string, chatId: string) {
+export type LoadUserChatDetailsOptions = {
+  limit?: number;
+  cursor?: string | null;
+};
+
+export function encodeRunCursor(run: { created_at: string; id: string }): string {
+  return Buffer.from(JSON.stringify({ created_at: run.created_at, id: run.id }), "utf8").toString("base64url");
+}
+
+export function decodeRunCursor(cursor: string): { created_at: string; id: string } | null {
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
+      created_at?: unknown;
+      id?: unknown;
+    };
+    if (typeof parsed.created_at !== "string" || typeof parsed.id !== "string") return null;
+    return { created_at: parsed.created_at, id: parsed.id };
+  } catch {
+    return null;
+  }
+}
+
+export async function loadUserChatDetails(
+  admin: ChatAdminClient,
+  userId: string,
+  chatId: string,
+  options: LoadUserChatDetailsOptions = {}
+) {
+  const limit = Math.min(Math.max(options.limit ?? 20, 1), 50);
   const { data: thread, error: threadError } = await admin
     .from("chat_threads")
     .select("id,title")
@@ -83,15 +163,36 @@ export async function loadUserChatDetails(admin: ChatAdminClient, userId: string
   if (threadError) throw threadError;
   if (!thread) throw new ApiError(404, "Chat not found.");
 
-  const { data: runs, error: runsError } = await admin
+  let runsQuery = admin
     .from("council_runs")
-    .select("id,prompt_text,final_answer,token_totals,created_at,models,judge_model,debate_depth,research_enabled,latency_ms")
+    .select("id,prompt_text,final_answer,token_totals,created_at,models,judge_model,debate_depth,research_enabled,status,error_message,latency_ms")
     .eq("thread_id", chatId)
     .eq("user_id", userId)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(limit + 1);
+
+  if (options.cursor) {
+    const decoded = decodeRunCursor(options.cursor);
+    if (!decoded) throw new ApiError(400, "Invalid run cursor.");
+    const createdAt = JSON.stringify(decoded.created_at);
+    const id = JSON.stringify(decoded.id);
+    runsQuery = runsQuery.or(
+      `created_at.lt.${createdAt},and(created_at.eq.${createdAt},id.lt.${id})`
+    );
+  }
+
+  const { data: runRows, error: runsError } = await runsQuery;
   if (runsError) throw runsError;
 
-  const runIds = (runs ?? []).map((run) => run.id as string);
+  const page = runRows ?? [];
+  const hasOlder = page.length > limit;
+  const newestFirst = hasOlder ? page.slice(0, limit) : page;
+  const runs = [...newestFirst].reverse() as StoredRun[];
+  const oldest = newestFirst.at(-1);
+  const nextOlderCursor = hasOlder && oldest ? encodeRunCursor(oldest) : null;
+
+  const runIds = runs.map((run) => run.id as string);
   const [responses, critiques, judges, research, usage, attachments] = await Promise.all([
     runIds.length
       ? admin.from("model_responses").select("id,run_id,model_id,stage,content,token_usage,latency_ms,status,error").in("run_id", runIds)
@@ -130,9 +231,9 @@ export async function loadUserChatDetails(admin: ChatAdminClient, userId: string
     }
   }
 
-  return assembleChatDetails({
+  const details = assembleChatDetails({
     thread: thread as ThreadPayload["thread"],
-    runs: (runs ?? []) as StoredRun[],
+    runs,
     responses: (responses.data ?? []) as StoredModelResponse[],
     critiques: (critiques.data ?? []) as StoredCritique[],
     judges: (judges.data ?? []) as StoredJudge[],
@@ -140,6 +241,33 @@ export async function loadUserChatDetails(admin: ChatAdminClient, userId: string
     usage: (usage.data ?? []) as StoredUsage[],
     attachments: (attachments.data ?? []) as StoredRunAttachment[]
   });
+
+  return {
+    ...details,
+    nextOlderCursor,
+    hasOlder
+  };
+}
+
+export async function updateUserChatTitle(
+  admin: ChatAdminClient,
+  userId: string,
+  chatId: string,
+  title: string
+): Promise<{ id: string; title: string; updated_at: string }> {
+  const { data, error } = await admin
+    .from("chat_threads")
+    .update({
+      title,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", chatId)
+    .eq("user_id", userId)
+    .select("id,title,updated_at")
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new ApiError(404, "Chat not found.");
+  return data as { id: string; title: string; updated_at: string };
 }
 
 export async function deleteUserChat(admin: ChatAdminClient, userId: string, chatId: string) {

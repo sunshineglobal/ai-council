@@ -1,31 +1,108 @@
-import type { RefObject } from "react";
+"use client";
+
+import { useEffect, useRef } from "react";
+import type { KeyboardEvent, RefObject } from "react";
+import { PanelRightClose, X } from "lucide-react";
 import { RunTrace } from "@/components/run-trace";
 import { TokenBreakdown } from "@/components/token-breakdown";
 import { formatDuration, modelLabel } from "@/components/council-workspace/result-utils";
 import type { CouncilRunResult, ModelOption } from "@/lib/types";
+
+const FOCUSABLE_SELECTOR = [
+  "button:not([disabled])",
+  "a[href]",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])"
+].join(",");
 
 export function ActivityPanel({
   result,
   models,
   running,
   statusLog,
-  activityEndRef
+  open,
+  modal = false,
+  activityEndRef,
+  onClose
 }: {
   result: CouncilRunResult | null;
   models: ModelOption[];
   running: boolean;
   statusLog: string[];
+  open: boolean;
+  modal?: boolean;
   activityEndRef: RefObject<HTMLDivElement>;
+  onClose: () => void;
 }) {
+  const panelRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open || !modal) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeButtonRef.current?.focus();
+    return () => {
+      previouslyFocused?.focus();
+    };
+  }, [modal, open]);
+
+  function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (!modal || !open) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(panelRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? []);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   return (
-    <aside className="activity-pane" aria-label="Council activity">
+    <aside
+      ref={panelRef}
+      id="council-activity-panel"
+      aria-hidden={!open}
+      aria-labelledby="council-activity-title"
+      aria-modal={modal || undefined}
+      className={`activity-pane ${open ? "open" : "collapsed"}`}
+      inert={!open}
+      role={modal ? "dialog" : undefined}
+      onKeyDown={handleKeyDown}
+    >
       <div className="activity-header">
         <div>
-          <h2>Run Details &amp; Trace</h2>
+          <h2 id="council-activity-title">Run Details &amp; Trace</h2>
           <p className="muted" role="status" aria-live="polite">
             {running ? "Running..." : result ? "Complete" : "Waiting"}
           </p>
         </div>
+        <button
+          ref={closeButtonRef}
+          aria-label="Hide run details"
+          className="icon-button ghost"
+          type="button"
+          title="Hide run details"
+          onClick={onClose}
+        >
+          <span className="activity-close-desktop">
+            <PanelRightClose aria-hidden size={18} />
+          </span>
+          <span className="activity-close-mobile">
+            <X aria-hidden size={18} />
+          </span>
+        </button>
       </div>
       <div className="activity-scroll">
         {result ? (

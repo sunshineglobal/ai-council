@@ -25,6 +25,7 @@ export function SettingsDialog({
   researchEnabled,
   researchAvailable,
   saveHistory,
+  saveHistorySaving = false,
   modelFilter,
   running,
   onJudgeModelChange,
@@ -44,6 +45,7 @@ export function SettingsDialog({
   researchEnabled: boolean;
   researchAvailable: boolean;
   saveHistory: boolean;
+  saveHistorySaving?: boolean;
   modelFilter: string;
   running: boolean;
   onJudgeModelChange: (modelId: string) => void;
@@ -190,12 +192,13 @@ export function SettingsDialog({
             <label className="switch-row">
               <input
                 checked={saveHistory}
-                disabled={running}
+                disabled={running || saveHistorySaving}
                 type="checkbox"
                 onChange={(event) => onSaveHistoryChange(event.target.checked)}
               />
-              <span>Save history</span>
+              <span>Save history{saveHistorySaving ? " (saving…)" : ""}</span>
             </label>
+            <p className="muted small">Saved as your default for future council runs.</p>
           </div>
 
           <label className="field">

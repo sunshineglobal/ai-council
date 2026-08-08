@@ -124,12 +124,13 @@ export function reconstructRunResult(run: StoredRun, thread: ThreadPayload): Cou
 
 export function normalizeStoredAttachment(attachment: StoredAttachment): CouncilAttachment {
   return {
-    id: attachment.id,
+    id: attachment.file_id ?? attachment.id,
     filename: attachment.filename,
     contentType: attachment.contentType ?? attachment.content_type ?? "application/octet-stream",
     fileSize: Number(attachment.fileSize ?? attachment.file_size ?? 0),
     textPreview: attachment.textPreview ?? attachment.text_preview ?? undefined,
     extractionStatus: attachment.extractionStatus ?? attachment.extraction_status ?? "none",
+    extractionError: attachment.extractionError ?? attachment.extraction_error ?? undefined,
     createdAt: attachment.createdAt ?? attachment.created_at ?? ""
   };
 }

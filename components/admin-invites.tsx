@@ -58,14 +58,17 @@ export function AdminInvites() {
   }
 
   async function deleteInvite(invite: Invite) {
-    if (deletingId || !window.confirm(`Delete the invite for ${invite.email}?`)) return;
+    const message = invite.accepted_at
+      ? `Revoke access for ${invite.email}? They will lose access immediately and their profile will be removed.`
+      : `Remove the pending invite for ${invite.email}?`;
+    if (deletingId || !window.confirm(message)) return;
     setDeletingId(invite.id);
     setError("");
     try {
       await requestJson<{ ok: true }>(`/api/admin/invites/${invite.id}`, { method: "DELETE" });
       setInvites((current) => current.filter((item) => item.id !== invite.id));
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "Could not delete invite.");
+      setError(deleteError instanceof Error ? deleteError.message : "Could not update invite.");
     } finally {
       setDeletingId(null);
     }
@@ -121,10 +124,10 @@ export function AdminInvites() {
                     <td>{new Date(invite.created_at).toLocaleString()}</td>
                     <td>
                       <button
-                        aria-label={`Delete invite for ${invite.email}`}
+                        aria-label={invite.accepted_at ? `Revoke access for ${invite.email}` : `Remove invite for ${invite.email}`}
                         className="icon-button"
                         disabled={deletingId !== null}
-                        title={`Delete invite for ${invite.email}`}
+                        title={invite.accepted_at ? `Revoke ${invite.email}` : `Remove invite for ${invite.email}`}
                         type="button"
                         onClick={() => void deleteInvite(invite)}
                       >

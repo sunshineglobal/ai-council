@@ -8,6 +8,7 @@ export type {
   StoredRun,
   StoredRunAttachment,
   StoredUsage,
+  ThreadDetailsPage,
   ThreadPayload
 } from "@/lib/chats/types";
 

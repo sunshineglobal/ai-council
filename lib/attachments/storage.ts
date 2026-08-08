@@ -5,6 +5,8 @@ export {
   deleteUserAttachments
 } from "@/lib/attachments/deletion";
 export {
+  getUserAttachmentDownload,
+  getUserAttachmentPreview,
   listUserAttachments,
   loadUserAttachments,
   persistRunAttachments

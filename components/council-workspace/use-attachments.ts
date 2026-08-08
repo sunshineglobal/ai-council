@@ -13,12 +13,10 @@ export function useAttachments() {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
 
-  const uploadFiles = useCallback(async (
-    event: ChangeEvent<HTMLInputElement>,
+  const uploadSelectedFiles = useCallback(async (
+    selectedFiles: File[],
     saveHistory: boolean
   ) => {
-    const selectedFiles = Array.from(event.target.files ?? []);
-    event.target.value = "";
     if (!selectedFiles.length) return;
     if (attachments.length + selectedFiles.length > MAX_ATTACHMENT_COUNT) {
       setUploadError(`Attach at most ${MAX_ATTACHMENT_COUNT} files.`);
@@ -47,6 +45,22 @@ export function useAttachments() {
     }
   }, [attachments.length]);
 
+  const uploadFiles = useCallback(async (
+    event: ChangeEvent<HTMLInputElement>,
+    saveHistory: boolean
+  ) => {
+    const selectedFiles = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    await uploadSelectedFiles(selectedFiles, saveHistory);
+  }, [uploadSelectedFiles]);
+
+  const uploadFileList = useCallback(async (
+    files: FileList | File[],
+    saveHistory: boolean
+  ) => {
+    await uploadSelectedFiles(Array.from(files), saveHistory);
+  }, [uploadSelectedFiles]);
+
   const removeAttachment = useCallback(async (fileId: string) => {
     const removed = attachments.find((attachment) => attachment.id === fileId);
     setAttachments((current) => current.filter((attachment) => attachment.id !== fileId));
@@ -68,6 +82,7 @@ export function useAttachments() {
     uploading,
     uploadError,
     uploadFiles,
+    uploadFileList,
     removeAttachment,
     clearAttachments,
     clearUploadError

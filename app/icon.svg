@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="AI Council">
+  <rect width="64" height="64" rx="14" fill="#1b1c1d"/>
+  <circle cx="20" cy="28" r="7" fill="#3468c7"/>
+  <circle cx="44" cy="28" r="7" fill="#0f8f73"/>
+  <circle cx="32" cy="44" r="7" fill="#a86714"/>
+  <path d="M26 28h12M26.5 32.5 32 40m5.5-7.5L32 40" stroke="#f7f7f5" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

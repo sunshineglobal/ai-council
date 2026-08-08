@@ -8,14 +8,16 @@ export const DEFAULT_COUNCIL = [
 ];
 
 export function reconcileCouncilModels(current: string[], available: ModelOption[]): string[] {
-  if (current.length && !isDefaultCouncil(current)) return current;
+  const availableIds = new Set(available.map((model) => model.id));
+  const retained = current.filter((modelId) => availableIds.has(modelId));
+  if (retained.length && !isDefaultCouncil(current)) return retained;
 
-  const validDefaults = DEFAULT_COUNCIL.filter((id) => available.some((model) => model.id === id));
+  const validDefaults = DEFAULT_COUNCIL.filter((id) => availableIds.has(id));
   return validDefaults.length ? validDefaults : available.slice(0, 3).map((model) => model.id);
 }
 
 export function reconcileJudgeModel(current: string, available: ModelOption[]): string {
-  if (current && current !== DEFAULT_JUDGE) return current;
+  if (current && available.some((model) => model.id === current)) return current;
   return available.some((model) => model.id === DEFAULT_JUDGE)
     ? DEFAULT_JUDGE
     : available[0]?.id ?? "";

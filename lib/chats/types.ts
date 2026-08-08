@@ -15,6 +15,7 @@ export type ChatSummary = {
 
 export type StoredAttachment = {
   id: string;
+  file_id?: string | null;
   filename: string;
   content_type?: string | null;
   contentType?: string;
@@ -24,6 +25,8 @@ export type StoredAttachment = {
   textPreview?: string;
   extraction_status?: CouncilAttachment["extractionStatus"];
   extractionStatus?: CouncilAttachment["extractionStatus"];
+  extraction_error?: string | null;
+  extractionError?: string;
   created_at?: string;
   createdAt?: string;
 };
@@ -31,6 +34,8 @@ export type StoredAttachment = {
 export type StoredRunAttachment = StoredAttachment & {
   run_id: string;
 };
+
+export type StoredRunStatus = "queued" | "running" | "complete" | "failed";
 
 export type StoredRun = {
   id: string;
@@ -42,6 +47,8 @@ export type StoredRun = {
   judge_model: string;
   debate_depth: number;
   research_enabled: boolean;
+  status?: StoredRunStatus;
+  error_message?: string | null;
   attachments?: StoredAttachment[];
   latency_ms: number;
 };
@@ -111,4 +118,9 @@ export type ThreadPayload = {
   research: StoredResearch[];
   usage: StoredUsage[];
   attachments: StoredRunAttachment[];
+};
+
+export type ThreadDetailsPage = ThreadPayload & {
+  nextOlderCursor: string | null;
+  hasOlder: boolean;
 };

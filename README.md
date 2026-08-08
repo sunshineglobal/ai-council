@@ -10,7 +10,7 @@ A private, invite-only AI council app. It uses Supabase for authentication and d
 - Optional web research through Firecrawl's standalone search API, with at least 15 detailed sources gathered before council answers.
 - File attachments in chat: upload up to 5 private files per run, with text extraction for text-like formats such as Markdown, CSV, JSON, SQL, logs, and source files.
 - Usage and cost tracking with admin budget controls.
-- Evals for comparing council configurations.
+- Evals for comparing labeled council configurations with rubric scores and per-prompt detail.
 
 ## Project structure
 

@@ -79,41 +79,39 @@ export async function ensureProfile(user: User): Promise<AuthProfile> {
 
   if (existingError) throw existingError;
 
-  const invite = await isInvitedEmail(email);
-  if (
-    !invite.allowed
-    && existingProfile
-    && existingProfile.id === user.id
-    && existingProfile.role === "admin"
-    && email === initialAdminEmail()
-  ) {
-    await persistInitialAdminInvite(user.id, email);
-    return existingProfile as AuthProfile;
-  }
-
-  if (!invite.allowed) {
-    throw new ApiError(403, "This account is not invited.");
-  }
-
   if (existingProfile) {
     if (existingProfile.id !== user.id) {
       throw new ApiError(409, "This email is linked to a different account. Contact an administrator.");
     }
 
-    if (existingProfile.role === invite.role) {
+    const invite = await isInvitedEmail(email);
+    if (
+      !invite.allowed
+      && existingProfile.role === "admin"
+      && email === initialAdminEmail()
+    ) {
+      await persistInitialAdminInvite(user.id, email);
       return existingProfile as AuthProfile;
     }
 
-    const { data, error } = await admin
-      .from("profiles")
-      .update({ role: invite.role, updated_at: new Date().toISOString() })
-      .eq("id", user.id)
-      .eq("email", email)
-      .select("id,email,role,default_save_history,monthly_budget_usd")
-      .single();
+    if (invite.allowed && existingProfile.role !== invite.role) {
+      const { data, error } = await admin
+        .from("profiles")
+        .update({ role: invite.role, updated_at: new Date().toISOString() })
+        .eq("id", user.id)
+        .eq("email", email)
+        .select("id,email,role,default_save_history,monthly_budget_usd")
+        .single();
+      if (error) throw error;
+      return data as AuthProfile;
+    }
 
-    if (error) throw error;
-    return data as AuthProfile;
+    return existingProfile as AuthProfile;
+  }
+
+  const invite = await isInvitedEmail(email);
+  if (!invite.allowed) {
+    throw new ApiError(403, "This account is not invited.");
   }
 
   const { data, error } = await admin
@@ -196,4 +194,79 @@ export async function requireAdminProfile(): Promise<AuthProfile> {
     throw new ApiError(403, "Admin access required.");
   }
   return profile;
+}
+
+export async function updateDefaultSaveHistory(userId: string, defaultSaveHistory: boolean): Promise<boolean> {
+  const admin = createSupabaseAdminClient();
+  const { data, error } = await admin
+    .from("profiles")
+    .update({
+      default_save_history: defaultSaveHistory,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", userId)
+    .select("default_save_history")
+    .single();
+  if (error) throw error;
+  return Boolean(data.default_save_history);
+}
+
+export async function revokeInviteAccess(params: {
+  inviteId: string;
+  actorUserId: string;
+}): Promise<{ revokedProfile: boolean }> {
+  const admin = createSupabaseAdminClient();
+  const { data: invite, error: inviteError } = await admin
+    .from("invites")
+    .select("id,email,role,accepted_at")
+    .eq("id", params.inviteId)
+    .maybeSingle();
+  if (inviteError) throw inviteError;
+  if (!invite) throw new ApiError(404, "Invite not found.");
+
+  const email = normalizeEmail(invite.email as string);
+  const { data: profile, error: profileError } = await admin
+    .from("profiles")
+    .select("id,role")
+    .eq("email", email)
+    .maybeSingle();
+  if (profileError) throw profileError;
+
+  if (profile?.id === params.actorUserId) {
+    throw new ApiError(400, "You cannot revoke your own access.");
+  }
+
+  if (invite.role === "admin" || profile?.role === "admin") {
+    const { count, error: adminCountError } = await admin
+      .from("profiles")
+      .select("id", { count: "exact", head: true })
+      .eq("role", "admin");
+    if (adminCountError) throw adminCountError;
+    if ((count ?? 0) <= 1 && profile?.role === "admin") {
+      throw new ApiError(400, "Cannot revoke the last administrator.");
+    }
+  }
+
+  let revokedProfile = false;
+  if (profile) {
+    const { error: deleteProfileError } = await admin
+      .from("profiles")
+      .delete()
+      .eq("id", profile.id);
+    if (deleteProfileError) throw deleteProfileError;
+    revokedProfile = true;
+
+    const { error: deleteAuthError } = await admin.auth.admin.deleteUser(profile.id);
+    if (deleteAuthError && !/not (found|exist)/i.test(deleteAuthError.message)) {
+      throw new ApiError(500, `Profile removed but auth user cleanup failed: ${deleteAuthError.message}`);
+    }
+  }
+
+  const { error: deleteInviteError } = await admin
+    .from("invites")
+    .delete()
+    .eq("id", params.inviteId);
+  if (deleteInviteError) throw deleteInviteError;
+
+  return { revokedProfile };
 }

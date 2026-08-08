@@ -13,6 +13,161 @@
   grid-template-columns: 0 minmax(0, 1fr) minmax(330px, 420px);
 }
 
+.workspace.activity-collapsed {
+  grid-template-columns: 280px minmax(0, 1fr) 0;
+}
+
+.workspace.sidebar-collapsed.activity-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr) 0;
+}
+
+.chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.chat-title-button {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-title-button:hover {
+  color: var(--blue);
+}
+
+.chat-title-input {
+  width: min(420px, 58vw);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 6px 10px;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.sidebar-search {
+  display: block;
+  margin: 0 0 10px;
+}
+
+.sidebar-search .input-shell {
+  min-height: 36px;
+}
+
+.answer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.composer.dragging {
+  border-color: rgba(52, 104, 199, 0.45);
+  box-shadow: 0 0 0 3px rgba(52, 104, 199, 0.12);
+}
+
+.composer-limit-hit {
+  color: var(--red);
+  font-weight: 650;
+}
+
+.attachment-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.attachment-action {
+  width: 28px;
+  height: 28px;
+  color: var(--muted);
+}
+
+.attachment-preview-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+}
+
+.attachment-preview-panel {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 51;
+  width: min(720px, calc(100vw - 24px));
+  max-height: min(80vh, 720px);
+  overflow: auto;
+  transform: translate(-50%, -50%);
+}
+
+.attachment-preview-body {
+  margin: 0;
+  max-height: min(56vh, 480px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 12px;
+  white-space: pre-wrap;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.load-more-chats {
+  width: 100%;
+  justify-content: center;
+  margin-top: 6px;
+}
+
+.load-older-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.budget-input {
+  width: 8.5rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 6px 8px;
+}
+
+.budget-ok {
+  color: var(--green);
+}
+
+.budget-warning {
+  color: var(--amber);
+}
+
+.budget-over {
+  color: var(--red);
+}
+
+.budget-unset {
+  color: var(--muted);
+}
+
+.pill-danger {
+  color: var(--red);
+  border-color: rgba(179, 58, 58, 0.28);
+  background: rgba(179, 58, 58, 0.08);
+}
+
 .sidebar {
   min-width: 0;
   background:
@@ -574,7 +729,7 @@
 .chat-row {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 32px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   border-radius: 8px;
   border: 1px solid transparent;
@@ -616,26 +771,52 @@
   font-size: 12px;
 }
 
-.chat-delete-button {
+.chat-rename-form {
+  min-width: 0;
+  padding: 6px 8px;
+}
+
+.chat-rename-form input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  padding: 6px 8px;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.chat-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.chat-action-button {
   width: 28px;
   height: 28px;
   color: var(--muted);
   opacity: 0;
 }
 
-.chat-row:hover .chat-delete-button,
-.chat-row.active .chat-delete-button,
-.chat-delete-button:focus-visible {
+.chat-row:hover .chat-action-button,
+.chat-row.active .chat-action-button,
+.chat-action-button:focus-visible {
   opacity: 1;
 }
 
-.chat-delete-button:hover:not(:disabled) {
+.chat-action-button:hover:not(:disabled) {
+  background: rgba(52, 104, 199, 0.08);
+  color: var(--blue);
+}
+
+.chat-action-button[aria-label^="Delete"]:hover:not(:disabled) {
   background: rgba(179, 58, 58, 0.08);
   color: var(--red);
 }
 
 @media (hover: none) {
-  .chat-delete-button {
+  .chat-action-button {
     opacity: 1;
   }
 }

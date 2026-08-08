@@ -148,7 +148,7 @@ export type AuthProfile = {
 };
 
 export type CouncilEvent =
-  | { type: "started"; runId: string }
+  | { type: "started"; runId: string; threadId?: string }
   | { type: "research"; research: ResearchResult }
   | { type: "stage"; stage: CouncilStage; modelId?: string; message: string }
   | { type: "usage"; usage: UsageEvent }
@@ -156,4 +156,4 @@ export type CouncilEvent =
   | { type: "critique"; critique: CritiqueResult }
   | { type: "judge"; judge: JudgeResult }
   | { type: "complete"; result: CouncilRunResult }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; threadId?: string; runId?: string };

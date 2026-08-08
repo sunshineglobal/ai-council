@@ -27,6 +27,7 @@ export async function runProductionMaintenance(): Promise<MaintenanceResult> {
     .from("council_runs")
     .update({
       status: "failed",
+      error_message: "Run timed out or was interrupted.",
       updated_at: new Date().toISOString()
     })
     .eq("status", "running")

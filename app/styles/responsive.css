@@ -14,6 +14,14 @@
   .workspace.sidebar-collapsed {
     grid-template-columns: 0 minmax(0, 1fr) minmax(300px, 360px);
   }
+
+  .workspace.activity-collapsed {
+    grid-template-columns: 240px minmax(0, 1fr) 0;
+  }
+
+  .workspace.sidebar-collapsed.activity-collapsed {
+    grid-template-columns: 0 minmax(0, 1fr) 0;
+  }
 }
 
 @media (max-width: 980px) {
@@ -27,9 +35,11 @@
   }
 
   .workspace,
-  .workspace.sidebar-collapsed {
+  .workspace.sidebar-collapsed,
+  .workspace.activity-collapsed,
+  .workspace.sidebar-collapsed.activity-collapsed {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, auto) auto;
+    grid-template-rows: minmax(0, 1fr);
     overflow: auto;
   }
 

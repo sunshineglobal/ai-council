@@ -9,10 +9,15 @@ import {
   reconcileJudgeModel
 } from "@/components/council-workspace/model-selection";
 import { isAbortError } from "@/components/council-workspace/request-utils";
-import type { ChatSummary, ThreadPayload } from "@/components/council-workspace/types";
+import type { ChatSummary, ThreadDetailsPage, ThreadPayload } from "@/components/council-workspace/types";
 import { requestJson } from "@/lib/client-api";
 import { MAX_COUNCIL_MODELS } from "@/lib/limits";
 import type { ModelOption } from "@/lib/types";
+import {
+  filterAvailableModelIds,
+  readWorkspacePreferences,
+  writeWorkspacePreferences
+} from "@/lib/workspace-preferences";
 
 export type LoadThreadOptions = {
   clear?: boolean;
@@ -21,11 +26,19 @@ export type LoadThreadOptions = {
 export function useWorkspaceData({
   initialThreadId,
   running,
+  debateDepth,
+  researchEnabled,
+  onDebateDepthChange,
+  onResearchEnabledChange,
   onError,
   onClearError
 }: {
   initialThreadId?: string;
   running: boolean;
+  debateDepth: number;
+  researchEnabled: boolean;
+  onDebateDepthChange: (depth: number) => void;
+  onResearchEnabledChange: (enabled: boolean) => void;
   onError: (message: string) => void;
   onClearError: () => void;
 }) {
@@ -35,9 +48,15 @@ export function useWorkspaceData({
   const [selectedModels, setSelectedModels] = useState<string[]>([...DEFAULT_COUNCIL]);
   const [judgeModel, setJudgeModel] = useState(DEFAULT_JUDGE);
   const [chats, setChats] = useState<ChatSummary[]>([]);
+  const [chatsCursor, setChatsCursor] = useState<string | null>(null);
+  const [loadingMoreChats, setLoadingMoreChats] = useState(false);
   const [deletingChatId, setDeletingChatId] = useState<string | null>(null);
+  const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
   const [thread, setThread] = useState<ThreadPayload | null>(null);
+  const [olderRunsCursor, setOlderRunsCursor] = useState<string | null>(null);
+  const [loadingOlderRuns, setLoadingOlderRuns] = useState(false);
   const [threadLoading, setThreadLoading] = useState(Boolean(initialThreadId));
+  const [preferencesReady, setPreferencesReady] = useState(false);
   const threadAbortRef = useRef<AbortController | null>(null);
   const threadRequestIdRef = useRef(0);
 
@@ -46,25 +65,58 @@ export function useWorkspaceData({
       const body = await requestJson<{ models: ModelOption[]; researchAvailable: boolean }>("/api/models", { signal });
       setModels(body.models);
       setResearchAvailable(body.researchAvailable);
-      setSelectedModels((current) => reconcileCouncilModels(current, body.models));
-      setJudgeModel((current) => reconcileJudgeModel(current, body.models));
+
+      const availableIds = new Set(body.models.map((model) => model.id));
+      const stored = readWorkspacePreferences();
+      if (stored) {
+        const preferredModels = filterAvailableModelIds(stored.models, availableIds);
+        setSelectedModels(reconcileCouncilModels(preferredModels.length ? preferredModels : [...DEFAULT_COUNCIL], body.models));
+        setJudgeModel(reconcileJudgeModel(stored.judgeModel, body.models));
+        onDebateDepthChange(Math.min(4, Math.max(1, stored.debateDepth)));
+        onResearchEnabledChange(Boolean(stored.researchEnabled && body.researchAvailable));
+      } else {
+        setSelectedModels((current) => reconcileCouncilModels(current, body.models));
+        setJudgeModel((current) => reconcileJudgeModel(current, body.models));
+      }
+      setPreferencesReady(true);
     } catch (error) {
       if (!isAbortError(error)) {
         onError(error instanceof Error ? error.message : "Could not load models.");
       }
+      setPreferencesReady(true);
     }
-  }, [onError]);
+  }, [onDebateDepthChange, onError, onResearchEnabledChange]);
 
   const loadChats = useCallback(async (signal?: AbortSignal) => {
     try {
-      const body = await requestJson<{ chats: ChatSummary[] }>("/api/chats", { signal });
+      const body = await requestJson<{ chats: ChatSummary[]; nextCursor: string | null }>("/api/chats", { signal });
       setChats(body.chats);
+      setChatsCursor(body.nextCursor);
     } catch (error) {
       if (!isAbortError(error)) {
         onError(error instanceof Error ? error.message : "Could not load chats.");
       }
     }
   }, [onError]);
+
+  const loadMoreChats = useCallback(async () => {
+    if (!chatsCursor || loadingMoreChats) return;
+    setLoadingMoreChats(true);
+    try {
+      const body = await requestJson<{ chats: ChatSummary[]; nextCursor: string | null }>(
+        `/api/chats?cursor=${encodeURIComponent(chatsCursor)}`
+      );
+      setChats((current) => {
+        const seen = new Set(current.map((chat) => chat.id));
+        return [...current, ...body.chats.filter((chat) => !seen.has(chat.id))];
+      });
+      setChatsCursor(body.nextCursor);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Could not load more chats.");
+    } finally {
+      setLoadingMoreChats(false);
+    }
+  }, [chatsCursor, loadingMoreChats, onError]);
 
   const loadThread = useCallback(async (
     threadId: string,
@@ -74,16 +126,21 @@ export function useWorkspaceData({
     threadAbortRef.current?.abort();
     const controller = new AbortController();
     threadAbortRef.current = controller;
-    if (clear) setThread(null);
+    if (clear) {
+      setThread(null);
+      setOlderRunsCursor(null);
+    }
     setThreadLoading(true);
 
     try {
-      const body = await requestJson<ThreadPayload>(`/api/chats/${threadId}`, {
+      const body = await requestJson<ThreadDetailsPage>(`/api/chats/${threadId}`, {
         signal: controller.signal
       });
       if (threadRequestIdRef.current !== requestId) return null;
-      setThread(body);
-      return body;
+      const { nextOlderCursor, hasOlder: _hasOlder, ...payload } = body;
+      setThread(payload);
+      setOlderRunsCursor(nextOlderCursor);
+      return payload;
     } catch (error) {
       if (!isAbortError(error) && threadRequestIdRef.current === requestId) {
         onError(error instanceof Error ? error.message : "Could not load conversation.");
@@ -96,6 +153,50 @@ export function useWorkspaceData({
       }
     }
   }, [onError]);
+
+  const loadOlderRuns = useCallback(async () => {
+    if (!initialThreadId || !olderRunsCursor || loadingOlderRuns) return;
+    setLoadingOlderRuns(true);
+    try {
+      const body = await requestJson<ThreadDetailsPage>(
+        `/api/chats/${initialThreadId}?cursor=${encodeURIComponent(olderRunsCursor)}`
+      );
+      setThread((current) => {
+        if (!current) {
+          const { nextOlderCursor: _cursor, hasOlder: _hasOlder, ...payload } = body;
+          return payload;
+        }
+        const runIds = new Set(current.runs.map((run) => run.id));
+        const responseIds = new Set(current.responses.map((item) => item.id));
+        const critiqueIds = new Set(current.critiques.map((item) => item.id));
+        const judgeIds = new Set(current.judges.map((item) => item.id));
+        return {
+          thread: current.thread,
+          runs: [...body.runs.filter((run) => !runIds.has(run.id)), ...current.runs],
+          responses: [
+            ...body.responses.filter((item) => !responseIds.has(item.id)),
+            ...current.responses
+          ],
+          critiques: [
+            ...body.critiques.filter((item) => !critiqueIds.has(item.id)),
+            ...current.critiques
+          ],
+          judges: [
+            ...body.judges.filter((item) => !judgeIds.has(item.id)),
+            ...current.judges
+          ],
+          research: [...body.research, ...current.research],
+          usage: [...body.usage, ...current.usage],
+          attachments: [...body.attachments, ...current.attachments]
+        };
+      });
+      setOlderRunsCursor(body.nextOlderCursor);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Could not load earlier messages.");
+    } finally {
+      setLoadingOlderRuns(false);
+    }
+  }, [initialThreadId, loadingOlderRuns, olderRunsCursor, onError]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -118,6 +219,16 @@ export function useWorkspaceData({
       threadAbortRef.current = null;
     };
   }, [initialThreadId, loadThread]);
+
+  useEffect(() => {
+    if (!preferencesReady || !selectedModels.length || !judgeModel) return;
+    writeWorkspacePreferences({
+      models: selectedModels,
+      judgeModel,
+      debateDepth,
+      researchEnabled
+    });
+  }, [debateDepth, judgeModel, preferencesReady, researchEnabled, selectedModels]);
 
   const deleteChat = useCallback(async (chatId: string) => {
     const previousChats = chats;
@@ -144,6 +255,47 @@ export function useWorkspaceData({
     }
   }, [chats, deletingChatId, initialThreadId, onClearError, onError, router]);
 
+  const renameChat = useCallback(async (chatId: string, title: string) => {
+    const nextTitle = title.trim();
+    if (!nextTitle) {
+      onError("Chat title is required.");
+      return false;
+    }
+
+    const previousChats = chats;
+    const previousThread = thread;
+    setRenamingChatId(chatId);
+    onClearError();
+    setChats((current) => current.map((chat) => (
+      chat.id === chatId ? { ...chat, title: nextTitle, updated_at: new Date().toISOString() } : chat
+    )));
+    if (thread?.thread.id === chatId) {
+      setThread({ ...thread, thread: { ...thread.thread, title: nextTitle } });
+    }
+
+    try {
+      const body = await requestJson<{ chat: ChatSummary }>(`/api/chats/${chatId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: nextTitle })
+      });
+      setChats((current) => current.map((chat) => (chat.id === chatId ? body.chat : chat)));
+      if (thread?.thread.id === chatId) {
+        setThread((current) => (
+          current ? { ...current, thread: { ...current.thread, title: body.chat.title } } : current
+        ));
+      }
+      return true;
+    } catch (error) {
+      setChats(previousChats);
+      setThread(previousThread);
+      onError(error instanceof Error ? error.message : "Could not rename chat.");
+      return false;
+    } finally {
+      setRenamingChatId(null);
+    }
+  }, [chats, onClearError, onError, thread]);
+
   const toggleModel = useCallback((modelId: string) => {
     if (running) return;
     setSelectedModels((current) => {
@@ -160,12 +312,20 @@ export function useWorkspaceData({
     judgeModel,
     setJudgeModel,
     chats,
+    chatsCursor,
+    loadingMoreChats,
     deletingChatId,
+    renamingChatId,
     thread,
+    olderRunsCursor,
+    loadingOlderRuns,
     threadLoading,
     loadChats,
+    loadMoreChats,
     loadThread,
+    loadOlderRuns,
     deleteChat,
+    renameChat,
     toggleModel
   };
 }

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { assembleChatDetails, findUnreferencedAttachmentIds } from "@/lib/chats";
+import {
+  assembleChatDetails,
+  decodeChatCursor,
+  decodeRunCursor,
+  encodeChatCursor,
+  encodeRunCursor,
+  findUnreferencedAttachmentIds
+} from "@/lib/chats";
 import type {
   StoredCritique,
   StoredJudge,
@@ -113,6 +120,8 @@ function storedRun(id: string, prompt: string): StoredRun {
     judge_model: "judge-a",
     debate_depth: 1,
     research_enabled: false,
+    status: "complete",
+    error_message: null,
     latency_ms: 10
   };
 }
@@ -125,5 +134,33 @@ describe("chat attachment cleanup", () => {
         [{ file_id: "shared" }, { file_id: null }, { file_id: "unrelated" }]
       )
     ).toEqual(["unreferenced", "also-unreferenced"]);
+  });
+});
+
+describe("chat list cursors", () => {
+  it("round-trips cursor payloads", () => {
+    const cursor = encodeChatCursor({
+      id: "chat-1",
+      updated_at: "2026-08-08T12:00:00.000Z"
+    });
+    expect(decodeChatCursor(cursor)).toEqual({
+      id: "chat-1",
+      updated_at: "2026-08-08T12:00:00.000Z"
+    });
+    expect(decodeChatCursor("not-valid")).toBeNull();
+  });
+});
+
+describe("thread run cursors", () => {
+  it("round-trips run cursor payloads", () => {
+    const cursor = encodeRunCursor({
+      id: "run-1",
+      created_at: "2026-08-08T12:00:00.000Z"
+    });
+    expect(decodeRunCursor(cursor)).toEqual({
+      id: "run-1",
+      created_at: "2026-08-08T12:00:00.000Z"
+    });
+    expect(decodeRunCursor("nope")).toBeNull();
   });
 });

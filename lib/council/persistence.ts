@@ -106,11 +106,16 @@ export async function markCouncilRunComplete(
 
 export async function markCouncilRunFailed(
   admin: CouncilAdminClient,
-  params: { runId: string; userId: string; latencyMs: number }
+  params: { runId: string; userId: string; latencyMs: number; errorMessage?: string | null }
 ): Promise<void> {
   const { error } = await admin
     .from("council_runs")
-    .update({ status: "failed", latency_ms: params.latencyMs, updated_at: new Date().toISOString() })
+    .update({
+      status: "failed",
+      latency_ms: params.latencyMs,
+      error_message: params.errorMessage ?? null,
+      updated_at: new Date().toISOString()
+    })
     .eq("id", params.runId)
     .eq("user_id", params.userId);
   assertSupabaseOk("marking council run failed", error);

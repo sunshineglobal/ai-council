@@ -12,6 +12,8 @@ export {
   deleteUserAttachment,
   deleteUserAttachments,
   ensureAttachmentBucket,
+  getUserAttachmentDownload,
+  getUserAttachmentPreview,
   listUserAttachments,
   loadUserAttachments,
   persistRunAttachments,
@@ -20,6 +22,7 @@ export {
 export {
   attachmentDisplaySize,
   buildAttachmentContext,
+  buildContentDisposition,
   extractTextFromAttachment,
   isTextLikeAttachment,
   normalizeAttachment,

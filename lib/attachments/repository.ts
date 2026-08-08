@@ -1,4 +1,5 @@
 import { ApiError } from "@/lib/api-error";
+import { ATTACHMENT_BUCKET } from "@/lib/attachments/constants";
 import { normalizeAttachment } from "@/lib/attachments/text";
 import type { AttachmentRow } from "@/lib/attachments/types";
 import { MAX_ATTACHMENT_COUNT } from "@/lib/limits";
@@ -6,6 +7,12 @@ import type { createSupabaseAdminClient } from "@/lib/supabase/server";
 import type { CouncilAttachment } from "@/lib/types";
 
 type SupabaseAdmin = ReturnType<typeof createSupabaseAdminClient>;
+
+export type AttachmentDownload = {
+  filename: string;
+  contentType: string;
+  body: Blob;
+};
 
 export async function listUserAttachments(admin: SupabaseAdmin, userId: string): Promise<CouncilAttachment[]> {
   const { data, error } = await admin
@@ -67,4 +74,50 @@ export async function persistRunAttachments(params: {
   );
 
   if (error) throw error;
+}
+
+export async function getUserAttachmentDownload(
+  admin: SupabaseAdmin,
+  userId: string,
+  attachmentId: string
+): Promise<AttachmentDownload> {
+  const { data, error } = await admin
+    .from("file_attachments")
+    .select("id,filename,content_type,object_path")
+    .eq("id", attachmentId)
+    .eq("user_id", userId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data?.object_path) throw new ApiError(404, "File not found.");
+
+  const { data: blob, error: downloadError } = await admin.storage
+    .from(ATTACHMENT_BUCKET)
+    .download(data.object_path as string);
+  if (downloadError || !blob) {
+    throw new ApiError(404, "File content is unavailable.");
+  }
+
+  return {
+    filename: data.filename as string,
+    contentType: (data.content_type as string) || "text/plain",
+    body: blob
+  };
+}
+
+export async function getUserAttachmentPreview(
+  admin: SupabaseAdmin,
+  userId: string,
+  attachmentId: string
+): Promise<CouncilAttachment> {
+  const { data, error } = await admin
+    .from("file_attachments")
+    .select("id,filename,content_type,file_size,text_preview,extraction_status,extraction_error,created_at")
+    .eq("id", attachmentId)
+    .eq("user_id", userId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new ApiError(404, "File not found.");
+  return normalizeAttachment(data as AttachmentRow);
 }

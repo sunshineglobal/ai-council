@@ -4,6 +4,8 @@ import type { CouncilEvent, CouncilRunResult } from "@/lib/types";
 export type CouncilStreamOutcome = {
   terminal: boolean;
   result?: CouncilRunResult;
+  threadId?: string;
+  runId?: string;
 };
 
 export async function readCouncilEventStream(
@@ -15,6 +17,8 @@ export async function readCouncilEventStream(
   let buffer = "";
   let terminal = false;
   let result: CouncilRunResult | undefined;
+  let threadId: string | undefined;
+  let runId: string | undefined;
 
   try {
     while (true) {
@@ -31,7 +35,12 @@ export async function readCouncilEventStream(
       for (const block of blocks) {
         const event = parseCouncilStreamBlock(block);
         if (!event) continue;
-        ({ terminal, result } = recordTerminalEvent(event, terminal, result));
+        ({ terminal, result, threadId, runId } = recordStreamEvent(event, {
+          terminal,
+          result,
+          threadId,
+          runId
+        }));
         onEvent(event);
       }
     }
@@ -39,23 +48,48 @@ export async function readCouncilEventStream(
     if (buffer.trim()) {
       const event = parseCouncilStreamBlock(buffer);
       if (event) {
-        ({ terminal, result } = recordTerminalEvent(event, terminal, result));
+        ({ terminal, result, threadId, runId } = recordStreamEvent(event, {
+          terminal,
+          result,
+          threadId,
+          runId
+        }));
         onEvent(event);
       }
     }
 
-    return { terminal, result };
+    return { terminal, result, threadId, runId };
   } finally {
     reader.releaseLock();
   }
 }
 
-function recordTerminalEvent(
+function recordStreamEvent(
   event: CouncilEvent,
-  terminal: boolean,
-  result?: CouncilRunResult
+  current: CouncilStreamOutcome
 ): CouncilStreamOutcome {
-  if (event.type === "complete") return { terminal: true, result: event.result };
-  if (event.type === "error") return { terminal: true, result };
-  return { terminal, result };
+  if (event.type === "started") {
+    return {
+      ...current,
+      runId: event.runId,
+      threadId: event.threadId ?? current.threadId
+    };
+  }
+  if (event.type === "complete") {
+    return {
+      terminal: true,
+      result: event.result,
+      threadId: event.result.threadId ?? current.threadId,
+      runId: event.result.id
+    };
+  }
+  if (event.type === "error") {
+    return {
+      terminal: true,
+      result: current.result,
+      threadId: event.threadId ?? current.threadId,
+      runId: event.runId ?? current.runId
+    };
+  }
+  return current;
 }

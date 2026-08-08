@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
 import {
   buildAttachmentContext,
+  buildContentDisposition,
   extractTextFromAttachment,
   MAX_ATTACHMENT_CONTEXT_CHARS,
   sanitizeAttachmentFilename
@@ -12,6 +13,15 @@ describe("attachment helpers", () => {
   it("sanitizes unsafe filenames", () => {
     expect(sanitizeAttachmentFilename("../notes:plan?.md")).toBe("..-notes-plan-.md");
     expect(sanitizeAttachmentFilename("   ")).toBe("attachment.txt");
+  });
+
+  it("builds a single-line content disposition header", () => {
+    const header = buildContentDisposition('report\r\n"quoted".md');
+    expect(header.includes("\n")).toBe(false);
+    expect(header.includes("\r")).toBe(false);
+    expect(header).toContain('filename="');
+    expect(header).toContain("filename*=UTF-8''");
+    expect(buildContentDisposition("メモ.md")).toContain("filename*=UTF-8''");
   });
 
   it("extracts text-like files", () => {

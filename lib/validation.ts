@@ -31,6 +31,15 @@ export const adminUsageBudgetSchema = z.object({
   monthlyBudgetUsd: z.number().finite().min(0).max(999999.999999).nullable()
 });
 
+export const profilePreferencesSchema = z.object({
+  defaultSaveHistory: z.boolean()
+});
+
+export const chatTitleSchema = z.object({
+  title: z.string().trim().min(1).max(120)
+});
+
+
 export const evalRunSchema = z.object({
   name: z.string().trim().min(1).max(120),
   description: z.string().trim().max(2000).optional(),

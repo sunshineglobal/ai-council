@@ -1,9 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Beaker, Play } from "lucide-react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { Beaker, ChevronDown, ChevronRight, Play, Search } from "lucide-react";
 import { requestJson } from "@/lib/client-api";
+import { MAX_COUNCIL_DEBATE_ROUNDS } from "@/lib/limits";
 import type { ModelOption } from "@/lib/types";
+
+type EvalScore = {
+  score: number | null;
+  prompt: string;
+  rationale: string | null;
+  final_answer?: string | null;
+};
 
 type EvalRun = {
   id: string;
@@ -11,8 +19,14 @@ type EvalRun = {
   aggregate_score: number | null;
   created_at: string;
   baseline_label: string | null;
-  eval_sets?: { name?: string; rubric?: string } | null;
-  eval_scores?: Array<{ score: number | null; prompt: string; rationale: string | null }>;
+  council_config?: {
+    models?: string[];
+    judgeModel?: string;
+    debateDepth?: number;
+    researchEnabled?: boolean;
+  } | null;
+  eval_sets?: { name?: string; rubric?: string; description?: string | null } | null;
+  eval_scores?: EvalScore[];
 };
 
 type Notice = { kind: "error" | "status" | "success"; text: string };
@@ -21,24 +35,41 @@ export function EvalDashboard() {
   const [models, setModels] = useState<ModelOption[]>([]);
   const [evals, setEvals] = useState<EvalRun[]>([]);
   const [name, setName] = useState("Private quality check");
+  const [description, setDescription] = useState("");
+  const [baselineLabel, setBaselineLabel] = useState("");
   const [rubric, setRubric] = useState("Score for factuality, completeness, reasoning quality, and clarity.");
   const [items, setItems] = useState("Explain the tradeoffs of using multiple LLMs for one decision.");
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [judgeModel, setJudgeModel] = useState("");
+  const [debateDepth, setDebateDepth] = useState(1);
+  const [researchEnabled, setResearchEnabled] = useState(false);
+  const [researchAvailable, setResearchAvailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const [modelFilter, setModelFilter] = useState("");
+  const deferredModelFilter = useDeferredValue(modelFilter);
+
+  const filteredModels = useMemo(() => {
+    const query = deferredModelFilter.trim().toLowerCase();
+    if (!query) return models.slice(0, 80);
+    return models
+      .filter((model) => `${model.id} ${model.name}`.toLowerCase().includes(query))
+      .slice(0, 80);
+  }, [deferredModelFilter, models]);
 
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
     void Promise.all([
-      requestJson<{ models: ModelOption[] }>("/api/models", { signal: controller.signal }),
+      requestJson<{ models: ModelOption[]; researchAvailable?: boolean }>("/api/models", { signal: controller.signal }),
       requestJson<{ evals: EvalRun[] }>("/api/evals", { signal: controller.signal })
     ])
       .then(([modelsBody, evalsBody]) => {
         setModels(modelsBody.models);
+        setResearchAvailable(Boolean(modelsBody.researchAvailable));
         setSelectedModels((current) => (
           current.length ? current : modelsBody.models.slice(0, 3).map((model) => model.id)
         ));
@@ -89,12 +120,14 @@ export function EvalDashboard() {
         },
         body: JSON.stringify({
           name,
+          description: description.trim() || undefined,
+          baselineLabel: baselineLabel.trim() || undefined,
           rubric,
           items: prompts,
           models: selectedModels,
           judgeModel,
-          debateDepth: 1,
-          researchEnabled: false
+          debateDepth,
+          researchEnabled: researchEnabled && researchAvailable
         })
       });
       setNotice({ kind: "success", text: `Eval complete. Aggregate score: ${Math.round(body.aggregateScore)}` });
@@ -110,14 +143,27 @@ export function EvalDashboard() {
     <div className="stack">
       <form className="panel stack" onSubmit={runEval}>
         <div className="section-title">
-          <h2>Run private eval</h2>
+          <h2>Compare council configurations</h2>
           <Beaker size={16} />
         </div>
+        <p className="muted small">
+          Run the same prompts against a council configuration, score the answers with a rubric, and compare labeled baselines over time.
+        </p>
         <div className="form-row">
           <label className="field">
             <span>Name</span>
             <input value={name} onChange={(event) => setName(event.target.value)} />
           </label>
+          <label className="field">
+            <span>Baseline label</span>
+            <input
+              value={baselineLabel}
+              onChange={(event) => setBaselineLabel(event.target.value)}
+              placeholder="e.g. 3-model depth-1"
+            />
+          </label>
+        </div>
+        <div className="form-row">
           <label className="field">
             <span>Judge model</span>
             <select value={judgeModel} onChange={(event) => setJudgeModel(event.target.value)}>
@@ -128,7 +174,28 @@ export function EvalDashboard() {
               ))}
             </select>
           </label>
+          <label className="field">
+            <span>Debate depth</span>
+            <select
+              value={debateDepth}
+              onChange={(event) => setDebateDepth(Number(event.target.value))}
+            >
+              {Array.from({ length: Math.min(3, MAX_COUNCIL_DEBATE_ROUNDS) }, (_, index) => index + 1).map((depth) => (
+                <option key={depth} value={depth}>
+                  {depth} {depth === 1 ? "round" : "rounds"}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
+        <label className="field">
+          <span>Description</span>
+          <input
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            placeholder="Optional notes about this configuration"
+          />
+        </label>
         <label className="field">
           <span>Rubric</span>
           <textarea value={rubric} onChange={(event) => setRubric(event.target.value)} />
@@ -137,10 +204,41 @@ export function EvalDashboard() {
           <span>Prompts, one per line</span>
           <textarea value={items} onChange={(event) => setItems(event.target.value)} />
         </label>
+        <label className="switch-row">
+          <input
+            checked={researchEnabled}
+            disabled={!researchAvailable || running}
+            type="checkbox"
+            onChange={(event) => setResearchEnabled(event.target.checked)}
+          />
+          <span>Firecrawl research</span>
+        </label>
+        {!researchAvailable ? (
+          <p className="muted small">Research is unavailable until Firecrawl is configured.</p>
+        ) : null}
+        <label className="field">
+          <span>Search models ({selectedModels.length}/6 selected)</span>
+          <span className="input-shell">
+            <Search aria-hidden size={16} />
+            <input
+              value={modelFilter}
+              onChange={(event) => setModelFilter(event.target.value)}
+              placeholder="openai, claude, llama..."
+            />
+          </span>
+        </label>
         <div className="model-list">
-          {models.slice(0, 20).map((model) => (
+          {filteredModels.length === 0 ? (
+            <p className="muted small">No models match “{modelFilter.trim()}”.</p>
+          ) : null}
+          {filteredModels.map((model) => (
             <label className="model-item" key={model.id}>
-              <input checked={selectedModels.includes(model.id)} type="checkbox" onChange={() => toggleModel(model.id)} />
+              <input
+                checked={selectedModels.includes(model.id)}
+                disabled={running || (!selectedModels.includes(model.id) && selectedModels.length >= 6)}
+                type="checkbox"
+                onChange={() => toggleModel(model.id)}
+              />
               <span>
                 <strong>{model.name}</strong>
                 <span>{model.id}</span>
@@ -173,20 +271,79 @@ export function EvalDashboard() {
               <thead>
                 <tr>
                   <th scope="col">Name</th>
+                  <th scope="col">Baseline</th>
+                  <th scope="col">Config</th>
                   <th scope="col">Status</th>
                   <th scope="col">Score</th>
                   <th scope="col">Created</th>
                 </tr>
               </thead>
               <tbody>
-                {evals.map((evalRun) => (
-                  <tr key={evalRun.id}>
-                    <td>{evalRun.eval_sets?.name ?? "Eval"}</td>
-                    <td>{evalRun.status}</td>
-                    <td>{evalRun.aggregate_score?.toFixed(1) ?? "-"}</td>
-                    <td>{new Date(evalRun.created_at).toLocaleString()}</td>
-                  </tr>
-                ))}
+                {evals.flatMap((evalRun) => {
+                  const expanded = expandedId === evalRun.id;
+                  const config = evalRun.council_config;
+                  const configLabel = [
+                    config?.models?.length ? `${config.models.length} models` : null,
+                    config?.debateDepth != null ? `depth ${config.debateDepth}` : null,
+                    config?.researchEnabled ? "research" : null
+                  ].filter(Boolean).join(" · ") || "—";
+
+                  const rows = [
+                    <tr key={evalRun.id}>
+                      <td>
+                        <button
+                          className="link-button"
+                          type="button"
+                          aria-expanded={expanded}
+                          onClick={() => setExpandedId(expanded ? null : evalRun.id)}
+                        >
+                          {expanded ? <ChevronDown aria-hidden size={14} /> : <ChevronRight aria-hidden size={14} />}
+                          {evalRun.eval_sets?.name ?? "Eval"}
+                        </button>
+                      </td>
+                      <td>{evalRun.baseline_label || "—"}</td>
+                      <td>{configLabel}</td>
+                      <td>{evalRun.status}</td>
+                      <td>{evalRun.aggregate_score?.toFixed(1) ?? "-"}</td>
+                      <td>{new Date(evalRun.created_at).toLocaleString()}</td>
+                    </tr>
+                  ];
+
+                  if (expanded) {
+                    rows.push(
+                      <tr key={`${evalRun.id}-detail`}>
+                        <td colSpan={6}>
+                          <div className="stack eval-detail">
+                            {evalRun.eval_sets?.rubric ? (
+                              <p className="muted small"><strong>Rubric:</strong> {evalRun.eval_sets.rubric}</p>
+                            ) : null}
+                            {(evalRun.eval_scores ?? []).length ? (
+                              <ul className="eval-score-list">
+                                {(evalRun.eval_scores ?? []).map((score, index) => (
+                                  <li key={`${evalRun.id}-score-${index}`}>
+                                    <strong>{score.score?.toFixed(1) ?? "—"}</strong>
+                                    <span>{score.prompt}</span>
+                                    {score.rationale ? <p className="muted small">{score.rationale}</p> : null}
+                                    {score.final_answer ? (
+                                      <details className="eval-answer-details">
+                                        <summary>Council answer</summary>
+                                        <pre className="eval-answer-body">{score.final_answer}</pre>
+                                      </details>
+                                    ) : null}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="muted small">No per-prompt scores recorded.</p>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  }
+
+                  return rows;
+                })}
               </tbody>
             </table>
           </div>

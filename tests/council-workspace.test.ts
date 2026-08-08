@@ -11,7 +11,7 @@ import {
   reconcileCouncilModels,
   reconcileJudgeModel
 } from "@/components/council-workspace/model-selection";
-import { parseCouncilAnswer } from "@/components/council-workspace/result-utils";
+import { normalizeStoredAttachment, parseCouncilAnswer } from "@/components/council-workspace/result-utils";
 import {
   initialResponsiveSidebarState,
   isResponsiveSidebarOpen,
@@ -36,12 +36,14 @@ describe("workspace model defaults", () => {
       .toEqual(["model-a", "model-b", "model-c"]);
   });
 
-  it("preserves custom choices and reconciles only the default judge", () => {
-    const available = models(DEFAULT_JUDGE, "judge-b");
+  it("keeps available custom choices and falls back when they disappear", () => {
+    const available = models(DEFAULT_JUDGE, "judge-b", "custom-model");
     expect(reconcileCouncilModels(["custom-model"], available)).toEqual(["custom-model"]);
+    expect(reconcileCouncilModels(["missing-model"], models("judge-b", "model-a"))).toEqual(["judge-b", "model-a"]);
     expect(reconcileJudgeModel(DEFAULT_JUDGE, available)).toBe(DEFAULT_JUDGE);
     expect(reconcileJudgeModel(DEFAULT_JUDGE, models("judge-b"))).toBe("judge-b");
-    expect(reconcileJudgeModel("custom-judge", available)).toBe("custom-judge");
+    expect(reconcileJudgeModel("custom-judge", available)).toBe(DEFAULT_JUDGE);
+    expect(reconcileJudgeModel("judge-b", available)).toBe("judge-b");
     expect(isDefaultCouncil([...DEFAULT_COUNCIL])).toBe(true);
     expect(isDefaultCouncil([...DEFAULT_COUNCIL].reverse())).toBe(false);
   });
@@ -72,6 +74,25 @@ describe("responsive sidebar state", () => {
     expect(repeatedOverlay).toBe(openOverlay);
     expect(isResponsiveSidebarOpen(inlineAgain)).toBe(false);
     expect(isResponsiveSidebarOpen(overlayAgain)).toBe(false);
+  });
+});
+
+describe("live run progress visibility", () => {
+  it("keeps stopped runs idle without a result so the UI can hide thinking chrome", () => {
+    const running = liveRunReducer(initialLiveRunState, {
+      type: "start",
+      prompt: "Decide",
+      attachments: [],
+      config,
+      startedAt: "2026-08-08T00:00:00.000Z"
+    });
+    const stopping = liveRunReducer(running, { type: "stop_requested" });
+    const stopped = liveRunReducer(stopping, { type: "stopped" });
+    expect(stopped.phase).toBe("idle");
+    expect(stopped.result).toBeNull();
+    expect(stopped.error).toBe("");
+    expect(stopped.statusLog.at(-1)).toBe("Council run stopped.");
+    expect(buildLiveRunResult(stopped)).toBeNull();
   });
 });
 
@@ -146,6 +167,44 @@ describe("council answer parsing", () => {
       disagreements: ["Timing"],
       blindSpots: ["Migration cost"]
     });
+  });
+});
+
+describe("stored attachment normalization", () => {
+  it("prefers file_id for download identity and keeps extraction errors", () => {
+    expect(normalizeStoredAttachment({
+      id: "join-row",
+      file_id: "file-123",
+      filename: "notes.md",
+      content_type: "text/markdown",
+      file_size: 12,
+      text_preview: "hello",
+      extraction_status: "failed",
+      extraction_error: "decode failed",
+      created_at: "2026-08-08T00:00:00.000Z"
+    })).toMatchObject({
+      id: "file-123",
+      extractionStatus: "failed",
+      extractionError: "decode failed"
+    });
+  });
+});
+
+describe("live run error handling", () => {
+  it("keeps the prompt available after an error event for retry", () => {
+    const running = liveRunReducer(initialLiveRunState, {
+      type: "start",
+      prompt: "Retry me",
+      attachments: [],
+      config,
+      startedAt: "2026-08-08T00:00:00.000Z"
+    });
+    const failed = liveRunReducer(running, {
+      type: "event",
+      event: { type: "error", message: "Council run failed.", threadId: "thread-a", runId: "run-a" }
+    });
+    expect(failed.prompt).toBe("Retry me");
+    expect(failed.error).toBe("Council run failed.");
   });
 });
 

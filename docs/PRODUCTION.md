@@ -28,7 +28,7 @@ Current per-user limits are 12 council runs/hour, 2 evals/hour, 10 research requ
    ```
 
 2. Back up the Supabase database. Confirm point-in-time recovery or a recent restorable snapshot for the target environment.
-3. Apply all files in `supabase/migrations` in filename order. Migration `0005_production_guardrails.sql` is transactional and removes direct browser data/storage access; deploy the matching application in the same release window.
+3. Apply all files in `supabase/migrations` in filename order. Migration `0005_production_guardrails.sql` is transactional and removes direct browser data/storage access; deploy the matching application in the same release window. Migration `0006_completion_alignments.sql` sets the attachment bucket limit to 4 MB and drops the unused `model_critiques.target_model_id` column. Migration `0007_run_error_message.sql` adds `council_runs.error_message` for failed-run display.
 4. Configure every required variable from `.env.example`. Generate `CRON_SECRET` with at least 32 random characters. Never place service-role, OpenRouter, Firecrawl, cron, or webhook credentials in a `NEXT_PUBLIC_` variable.
 5. Configure the Supabase authentication site URL and allowed redirect URL as:
 

@@ -143,16 +143,19 @@ export function useCouncilRun({ initialThreadId }: { initialThreadId?: string })
       if (config.saveHistory) {
         await loadChats(controller.signal);
         if (runRequestIdRef.current !== requestId) return;
-        const completedThreadId = outcome.result?.threadId ?? config.threadId;
+        const completedThreadId = outcome.result?.threadId ?? outcome.threadId ?? config.threadId;
+        const completedRunId = outcome.result?.id ?? outcome.runId;
         if (!config.threadId && completedThreadId) {
           router.replace(`/app/chats/${completedThreadId}`);
           return;
         }
-        if (completedThreadId && outcome.result) {
+        if (completedThreadId) {
           const refreshedThread = await loadThread(completedThreadId);
-          const includesCompletedRun = refreshedThread?.runs.some((storedRun) => storedRun.id === outcome.result?.id);
-          if (includesCompletedRun && runRequestIdRef.current === requestId) {
-            setSelectedRunId(outcome.result.id);
+          const includesRun = completedRunId
+            ? refreshedThread?.runs.some((storedRun) => storedRun.id === completedRunId)
+            : false;
+          if (includesRun && completedRunId && runRequestIdRef.current === requestId) {
+            setSelectedRunId(completedRunId);
             dispatchRun({ type: "synced_to_thread" });
           }
         }

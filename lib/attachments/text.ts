@@ -62,6 +62,17 @@ export function sanitizeAttachmentFilename(name: string): string {
   return clean || fallback;
 }
 
+export function buildContentDisposition(filename: string): string {
+  const sanitized = sanitizeAttachmentFilename(filename)
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/[^\x20-\x7E]/g, "_")
+    .replace(/"/g, "");
+  const ascii = sanitized || "attachment.txt";
+  const utf8Name = encodeURIComponent(filename.normalize("NFC"))
+    .replace(/['()]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${utf8Name}`;
+}
+
 export function isTextLikeAttachment(filename: string, contentType: string): boolean {
   const normalizedType = contentType.toLowerCase().split(";")[0]?.trim() ?? "";
   if (TEXT_MIME_PREFIXES.some((prefix) => normalizedType.startsWith(prefix))) return true;

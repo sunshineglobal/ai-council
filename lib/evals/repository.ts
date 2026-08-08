@@ -90,7 +90,7 @@ export async function markEvalRunFailed(admin: EvalAdminClient, evalRunId: strin
 export async function listEvalRunsForUser(userId: string) {
   const { data, error } = await createSupabaseAdminClient()
     .from("eval_runs")
-    .select("id,status,aggregate_score,created_at,baseline_label,eval_sets(name,rubric),eval_scores(score,prompt,rationale)")
+    .select("id,status,aggregate_score,created_at,baseline_label,council_config,eval_sets(name,rubric,description),eval_scores(score,prompt,rationale,final_answer)")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(20);
