@@ -138,6 +138,12 @@
   margin-bottom: 8px;
 }
 
+.member-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .budget-input {
   width: 8.5rem;
   border: 1px solid var(--line);
@@ -492,9 +498,32 @@
   white-space: nowrap;
 }
 
-.composer-meta span + span {
+.composer-meta span + span,
+.composer-meta span + .composer-budget,
+.composer-meta .composer-budget {
   padding-left: 8px;
   border-left: 1px solid var(--line);
+}
+
+.composer-budget {
+  max-width: 160px;
+  overflow: hidden;
+  color: inherit;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-budget:hover {
+  color: var(--ink);
+}
+
+.composer-budget.budget-warning {
+  color: var(--amber);
+}
+
+.composer-budget.budget-over {
+  color: var(--red);
 }
 
 .composer-actions {

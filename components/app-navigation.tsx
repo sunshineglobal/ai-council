@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, Brain, LogOut, Shield } from "lucide-react";
+import { BarChart3, Brain, LogOut, Shield, WalletCards } from "lucide-react";
+import { isCurrentPath } from "@/components/app-navigation-path";
 import { SignOutButton } from "@/components/sign-out-button";
 
 type AppNavigationProps = {
@@ -11,7 +12,8 @@ type AppNavigationProps = {
 
 const links = [
   { href: "/app", label: "Council", Icon: Brain },
-  { href: "/app/evals", label: "Evals", Icon: BarChart3 }
+  { href: "/app/evals", label: "Evals", Icon: BarChart3 },
+  { href: "/app/usage", label: "Usage", Icon: WalletCards }
 ] as const;
 
 export function AppNavigation({ isAdmin }: AppNavigationProps) {
@@ -46,9 +48,4 @@ export function AppNavigation({ isAdmin }: AppNavigationProps) {
       </SignOutButton>
     </nav>
   );
-}
-
-function isCurrentPath(pathname: string, href: string): boolean {
-  if (href === "/app") return pathname === href || pathname.startsWith("/app/chats/");
-  return pathname === href || pathname.startsWith(`${href}/`);
 }

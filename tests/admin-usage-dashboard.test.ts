@@ -8,6 +8,7 @@ import {
   budgetDraftReducer,
   initialBudgetDraftState
 } from "@/components/admin-usage-dashboard/budget-draft";
+import { recentRunHref } from "@/components/admin-usage-dashboard/recent-run-href";
 
 describe("admin budget draft state", () => {
   it("uses loaded values while the draft is clean", () => {
@@ -100,5 +101,13 @@ describe("admin usage month ranges", () => {
     });
 
     expect(formatRange(range.from, range.to)).toBe(`${startLabel} - ${endLabel}`);
+  });
+});
+
+describe("recent run chat links", () => {
+  it("links saved runs only on the viewer's own usage page", () => {
+    expect(recentRunHref({ threadId: "thread-1" }, true)).toBe("/app/chats/thread-1");
+    expect(recentRunHref({ threadId: "thread-1" }, false)).toBeNull();
+    expect(recentRunHref({ threadId: null }, true)).toBeNull();
   });
 });

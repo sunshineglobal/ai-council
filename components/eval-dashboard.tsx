@@ -1,12 +1,28 @@
 "use client";
 
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
-import { Beaker, ChevronDown, ChevronRight, Play, Search } from "lucide-react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { Beaker, ChevronDown, ChevronRight, Play, Search, Square } from "lucide-react";
+import {
+  canResumeEval,
+  evalItemCount,
+  evalNoticeClass,
+  formatEvalStatus
+} from "@/components/eval-dashboard/eval-status";
+import {
+  applyEvalEvent,
+  emptyLiveEvalState,
+  readEvalEventStream,
+  type LiveEvalState
+} from "@/components/eval-dashboard/read-eval-stream";
+import { isAbortError, readResponseError } from "@/components/council-workspace/request-utils";
 import { requestJson } from "@/lib/client-api";
+import type { EvalEvent } from "@/lib/evals/events";
+import { compactText } from "@/lib/format";
 import { MAX_COUNCIL_DEBATE_ROUNDS } from "@/lib/limits";
 import type { ModelOption } from "@/lib/types";
 
 type EvalScore = {
+  item_index?: number;
   score: number | null;
   prompt: string;
   rationale: string | null;
@@ -25,7 +41,7 @@ type EvalRun = {
     debateDepth?: number;
     researchEnabled?: boolean;
   } | null;
-  eval_sets?: { name?: string; rubric?: string; description?: string | null } | null;
+  eval_sets?: { name?: string; rubric?: string; description?: string | null; items?: unknown } | null;
   eval_scores?: EvalScore[];
 };
 
@@ -46,7 +62,10 @@ export function EvalDashboard() {
   const [researchAvailable, setResearchAvailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [live, setLive] = useState<LiveEvalState>(emptyLiveEvalState);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const runAbortRef = useRef<AbortController | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [modelFilter, setModelFilter] = useState("");
@@ -109,33 +128,73 @@ export function EvalDashboard() {
       return;
     }
 
+    await startEval({
+      name,
+      description: description.trim() || undefined,
+      baselineLabel: baselineLabel.trim() || undefined,
+      rubric,
+      items: prompts,
+      models: selectedModels,
+      judgeModel,
+      debateDepth,
+      researchEnabled: researchEnabled && researchAvailable
+    });
+  }
+
+  function stopEval() {
+    if (!running || stopping) return;
+    setStopping(true);
+    runAbortRef.current?.abort();
+  }
+
+  async function startEval(body: Record<string, unknown>) {
+    if (running) return;
+
+    const controller = new AbortController();
+    runAbortRef.current = controller;
     setRunning(true);
-    setNotice({ kind: "status", text: "Running eval. This can take a few minutes." });
+    setStopping(false);
+    setLive(initialLiveState(body, evals));
+    setNotice({ kind: "status", text: "Starting eval…" });
+
     try {
-      const body = await requestJson<{ aggregateScore: number }>("/api/evals/run", {
+      const response = await fetch("/api/evals/run", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Idempotency-Key": crypto.randomUUID()
         },
-        body: JSON.stringify({
-          name,
-          description: description.trim() || undefined,
-          baselineLabel: baselineLabel.trim() || undefined,
-          rubric,
-          items: prompts,
-          models: selectedModels,
-          judgeModel,
-          debateDepth,
-          researchEnabled: researchEnabled && researchAvailable
-        })
+        body: JSON.stringify(body),
+        signal: controller.signal
       });
-      setNotice({ kind: "success", text: `Eval complete. Aggregate score: ${Math.round(body.aggregateScore)}` });
+
+      if (!response.ok || !response.body) {
+        throw new Error(await readResponseError(response, "Eval request failed"));
+      }
+
+      const outcome = await readEvalEventStream(response.body, (event) => {
+        setLive((current) => applyEvalEvent(current, event));
+        setNotice(noticeForEvent(event));
+        if (event.type === "started" || event.type === "complete" || event.type === "partial") {
+          setExpandedId(event.evalRunId);
+        }
+      });
+
+      if (!outcome.terminal) {
+        throw new Error("Eval stream ended before a final result arrived.");
+      }
       setRefreshVersion((version) => version + 1);
     } catch (runError) {
-      setNotice({ kind: "error", text: runError instanceof Error ? runError.message : "Eval failed." });
+      if (isAbortError(runError)) {
+        setNotice({ kind: "status", text: "Eval stopped." });
+        setRefreshVersion((version) => version + 1);
+      } else {
+        setNotice({ kind: "error", text: runError instanceof Error ? runError.message : "Eval failed." });
+      }
     } finally {
+      if (runAbortRef.current === controller) runAbortRef.current = null;
       setRunning(false);
+      setStopping(false);
     }
   }
 
@@ -147,7 +206,7 @@ export function EvalDashboard() {
           <Beaker size={16} />
         </div>
         <p className="muted small">
-          Run the same prompts against a council configuration, score the answers with a rubric, and compare labeled baselines over time.
+          Run the same prompts against a council configuration, score the answers with a rubric, and compare labeled baselines over time. Stop a long run to keep scored prompts, then resume the rest.
         </p>
         <div className="form-row">
           <label className="field">
@@ -246,13 +305,44 @@ export function EvalDashboard() {
             </label>
           ))}
         </div>
-        <button className="button primary" disabled={running || selectedModels.length === 0} type="submit">
-          <Play size={16} />
-          {running ? "Running" : "Run eval"}
-        </button>
+        <div className="eval-run-actions">
+          <button className="button primary" disabled={running || selectedModels.length === 0} type="submit">
+            <Play size={16} />
+            {running ? "Running" : "Run eval"}
+          </button>
+          {running ? (
+            <button
+              className="button subtle"
+              type="button"
+              disabled={stopping}
+              onClick={stopEval}
+            >
+              <Square size={14} />
+              {stopping ? "Stopping" : "Stop"}
+            </button>
+          ) : null}
+        </div>
+        {running && live.total > 0 ? (
+          <p className="muted small" role="status">
+            {live.currentPrompt
+              ? `Scoring ${(live.currentIndex ?? live.completed) + 1} of ${live.total}: ${compactText(live.currentPrompt, 80)}`
+              : `Scored ${live.completed} of ${live.total} prompts.`}
+          </p>
+        ) : null}
+        {live.scores.length ? (
+          <ul className="eval-score-list">
+            {live.scores.map((score) => (
+              <li key={`live-${score.itemIndex}`}>
+                <strong>{score.score.toFixed(1)}</strong>
+                <span>{score.prompt}</span>
+                {score.rationale ? <p className="muted small">{score.rationale}</p> : null}
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {notice ? (
           <p
-            className={notice.kind === "error" ? "error-text" : "success-text"}
+            className={evalNoticeClass(notice.kind)}
             role={notice.kind === "error" ? "alert" : "status"}
           >
             {notice.text}
@@ -282,11 +372,17 @@ export function EvalDashboard() {
                 {evals.flatMap((evalRun) => {
                   const expanded = expandedId === evalRun.id;
                   const config = evalRun.council_config;
+                  const scored = (evalRun.eval_scores ?? []).length;
+                  const total = evalItemCount(evalRun.eval_sets?.items);
+                  const resumable = !running && canResumeEval(evalRun.status, scored, total);
                   const configLabel = [
                     config?.models?.length ? `${config.models.length} models` : null,
                     config?.debateDepth != null ? `depth ${config.debateDepth}` : null,
                     config?.researchEnabled ? "research" : null
                   ].filter(Boolean).join(" · ") || "—";
+                  const scores = [...(evalRun.eval_scores ?? [])].sort(
+                    (left, right) => (left.item_index ?? 0) - (right.item_index ?? 0)
+                  );
 
                   const rows = [
                     <tr key={evalRun.id}>
@@ -303,7 +399,7 @@ export function EvalDashboard() {
                       </td>
                       <td>{evalRun.baseline_label || "—"}</td>
                       <td>{configLabel}</td>
-                      <td>{evalRun.status}</td>
+                      <td>{formatEvalStatus(evalRun.status, scored, total)}</td>
                       <td>{evalRun.aggregate_score?.toFixed(1) ?? "-"}</td>
                       <td>{new Date(evalRun.created_at).toLocaleString()}</td>
                     </tr>
@@ -317,10 +413,19 @@ export function EvalDashboard() {
                             {evalRun.eval_sets?.rubric ? (
                               <p className="muted small"><strong>Rubric:</strong> {evalRun.eval_sets.rubric}</p>
                             ) : null}
-                            {(evalRun.eval_scores ?? []).length ? (
+                            {resumable ? (
+                              <button
+                                className="button subtle small"
+                                type="button"
+                                onClick={() => void startEval({ evalRunId: evalRun.id })}
+                              >
+                                Resume remaining prompts
+                              </button>
+                            ) : null}
+                            {scores.length ? (
                               <ul className="eval-score-list">
-                                {(evalRun.eval_scores ?? []).map((score, index) => (
-                                  <li key={`${evalRun.id}-score-${index}`}>
+                                {scores.map((score, index) => (
+                                  <li key={`${evalRun.id}-score-${score.item_index ?? index}`}>
                                     <strong>{score.score?.toFixed(1) ?? "—"}</strong>
                                     <span>{score.prompt}</span>
                                     {score.rationale ? <p className="muted small">{score.rationale}</p> : null}
@@ -351,4 +456,55 @@ export function EvalDashboard() {
       </section>
     </div>
   );
+}
+
+function initialLiveState(body: Record<string, unknown>, evals: EvalRun[]): LiveEvalState {
+  const evalRunId = typeof body.evalRunId === "string" ? body.evalRunId : "";
+  const existing = evalRunId ? evals.find((evalRun) => evalRun.id === evalRunId) : undefined;
+  if (!existing) return emptyLiveEvalState;
+
+  const scores = [...(existing.eval_scores ?? [])]
+    .map((score, index) => ({
+      itemIndex: score.item_index ?? index,
+      prompt: score.prompt,
+      score: score.score ?? 0,
+      rationale: score.rationale ?? "",
+      finalAnswer: score.final_answer ?? ""
+    }))
+    .sort((left, right) => left.itemIndex - right.itemIndex);
+
+  return {
+    evalRunId: existing.id,
+    total: evalItemCount(existing.eval_sets?.items),
+    completed: scores.length,
+    scores
+  };
+}
+
+function noticeForEvent(event: EvalEvent): Notice {
+  if (event.type === "started") {
+    return {
+      kind: "status",
+      text: event.completed
+        ? `Resuming eval (${event.completed} of ${event.total} already scored).`
+        : `Running eval (${event.total} prompts).`
+    };
+  }
+  if (event.type === "item_started") {
+    return { kind: "status", text: `Scoring prompt ${event.itemIndex + 1} of ${event.total}.` };
+  }
+  if (event.type === "item_scored") {
+    return { kind: "status", text: `Scored prompt ${event.itemIndex + 1} of ${event.total}: ${Math.round(event.score)}.` };
+  }
+  if (event.type === "complete") {
+    return { kind: "success", text: `Eval complete. Aggregate score: ${Math.round(event.aggregateScore)}` };
+  }
+  if (event.type === "partial") {
+    const reason = event.reason === "timeout" ? "timed out" : "stopped";
+    return {
+      kind: "status",
+      text: `Eval ${reason} after ${event.scored} of ${event.total} prompts. Aggregate so far: ${Math.round(event.aggregateScore)}.`
+    };
+  }
+  return { kind: "error", text: event.message };
 }

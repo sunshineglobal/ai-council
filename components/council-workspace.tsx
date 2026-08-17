@@ -16,6 +16,7 @@ import {
 import { SettingsDialog } from "@/components/council-workspace/settings-dialog";
 import { useAttachments } from "@/components/council-workspace/use-attachments";
 import { useCouncilRun } from "@/components/council-workspace/use-council-run";
+import { useMonthlyUsage } from "@/components/council-workspace/use-monthly-usage";
 import { useResponsiveSidebar } from "@/components/council-workspace/use-responsive-sidebar";
 import { useWorkspaceData } from "@/components/council-workspace/use-workspace-data";
 import { MAX_ATTACHMENT_COUNT } from "@/lib/limits";
@@ -69,6 +70,7 @@ export function CouncilWorkspace({
     reportError,
     clearError
   } = useCouncilRun({ initialThreadId });
+  const budgetChip = useMonthlyUsage(run.result?.id ?? null);
   const {
     attachments,
     uploading,
@@ -421,6 +423,7 @@ export function CouncilWorkspace({
           onRemoveAttachment={(fileId) => void removeAttachment(fileId)}
           onStop={stop}
           onSubmit={handleSubmit}
+          budgetChip={budgetChip}
         />
       </section>
 

@@ -5,12 +5,26 @@ export function formatNumber(value: number): string {
 }
 
 export function formatCurrency(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return "$0.000000";
+  if (!Number.isFinite(value) || value <= 0) return formatUsd(0, 6);
+  return formatUsd(value, 6);
+}
+
+export function formatSignedCurrency(value: number): string {
+  if (!Number.isFinite(value)) return formatUsd(0, 6);
+  return formatUsd(value, 6);
+}
+
+export function formatCompactCurrency(value: number): string {
+  if (!Number.isFinite(value)) return formatUsd(0, 2);
+  return formatUsd(value, 2);
+}
+
+function formatUsd(value: number, fractionDigits: number): string {
   return new Intl.NumberFormat("en", {
     style: "currency",
     currency: "USD",
-    minimumFractionDigits: 6,
-    maximumFractionDigits: 6
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits
   }).format(value);
 }
 

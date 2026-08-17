@@ -12,7 +12,7 @@ import { requestJson } from "@/lib/client-api";
 
 type Notice = { kind: "error" | "success"; text: string };
 
-export function useAdminUsage() {
+export function useAdminUsage(memberId?: string) {
   const [month, setMonthState] = useState("");
   const [usage, setUsage] = useState<AdminUsageResponse | null>(null);
   const [budgetDraft, dispatchBudgetDraft] = useReducer(budgetDraftReducer, initialBudgetDraftState);
@@ -32,7 +32,8 @@ export function useAdminUsage() {
     const range = monthRange(month);
     setLoading(true);
     const params = new URLSearchParams({ from: range.from, to: range.to });
-    void requestJson<AdminUsageResponse>(`/api/admin/usage?${params.toString()}`, { signal: controller.signal })
+    const path = memberId ? `/api/admin/members/${memberId}/usage` : "/api/usage";
+    void requestJson<AdminUsageResponse>(`${path}?${params.toString()}`, { signal: controller.signal })
       .then((body) => {
         setUsage(body);
         dispatchBudgetDraft({ type: "loaded", monthlyBudgetUsd: body.budget.monthlyBudgetUsd });
@@ -47,7 +48,7 @@ export function useAdminUsage() {
       });
 
     return () => controller.abort();
-  }, [month, refreshVersion]);
+  }, [memberId, month, refreshVersion]);
 
   function setMonth(value: string) {
     setNotice(null);

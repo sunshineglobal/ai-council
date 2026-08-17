@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { CalendarDays, RefreshCw, Save, Users } from "lucide-react";
 import { currentMonthValue, formatRange, monthRange } from "@/components/admin-usage-dashboard/date-utils";
 import { requestJson } from "@/lib/client-api";
@@ -146,15 +147,20 @@ export function AdminMembers() {
                     />
                   </td>
                   <td>
-                    <button
-                      className="button subtle small"
-                      type="button"
-                      disabled={savingId !== null}
-                      onClick={() => void saveBudget(member)}
-                    >
-                      <Save aria-hidden size={14} />
-                      {savingId === member.id ? "Saving" : "Save"}
-                    </button>
+                    <div className="member-actions">
+                      <Link className="button subtle small" href={`/app/usage?member=${member.id}`}>
+                        Usage
+                      </Link>
+                      <button
+                        className="button subtle small"
+                        type="button"
+                        disabled={savingId !== null}
+                        onClick={() => void saveBudget(member)}
+                      >
+                        <Save aria-hidden size={14} />
+                        {savingId === member.id ? "Saving" : "Save"}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

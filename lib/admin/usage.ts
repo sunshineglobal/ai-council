@@ -14,6 +14,7 @@ import {
 
 type CouncilRunRow = {
   id: string;
+  thread_id: string | null;
   prompt_text: string | null;
   status: string;
   created_at: string;
@@ -65,7 +66,7 @@ export async function loadAdminUsage(params: {
       .lt("created_at", range.to),
     admin
       .from("council_runs")
-      .select("id,prompt_text,status,created_at,models,judge_model,debate_depth,research_enabled,latency_ms,cost_estimate,token_totals")
+      .select("id,thread_id,prompt_text,status,created_at,models,judge_model,debate_depth,research_enabled,latency_ms,cost_estimate,token_totals")
       .eq("user_id", userId)
       .gte("created_at", range.from)
       .lt("created_at", range.to)
@@ -126,6 +127,38 @@ export async function loadAdminUsage(params: {
   };
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export async function loadMemberUsage(params: {
+  targetUserId: string;
+  range: UsageRange;
+}): Promise<AdminUsageResponse> {
+  if (!UUID_PATTERN.test(params.targetUserId)) throw new ApiError(400, "Member id is invalid.");
+
+  const admin = createSupabaseAdminClient();
+  const { data, error } = await admin
+    .from("profiles")
+    .select("id,email,monthly_budget_usd")
+    .eq("id", params.targetUserId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new ApiError(404, "Member not found.");
+
+  const usage = await loadAdminUsage({
+    userId: data.id,
+    monthlyBudgetUsd: data.monthly_budget_usd,
+    range: params.range
+  });
+
+  return {
+    ...usage,
+    subject: {
+      id: data.id,
+      email: data.email
+    }
+  };
+}
+
 export async function updateAdminMonthlyBudget(params: {
   userId: string;
   monthlyBudgetUsd: number | null;
@@ -157,6 +190,7 @@ function summarizeRuns(
 
     return {
       id: run.id,
+      threadId: run.thread_id ?? null,
       prompt: run.prompt_text,
       status: run.status,
       createdAt: run.created_at,

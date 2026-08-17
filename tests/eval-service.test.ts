@@ -26,7 +26,10 @@ describe("eval service orchestration", () => {
 
     await expect(runEval({ profile, input }, dependencies)).resolves.toEqual({
       evalRunId: "eval-run-a",
-      aggregateScore: 70
+      aggregateScore: 70,
+      status: "complete",
+      scored: 2,
+      total: 2
     });
 
     expect(dependencies.runCouncil).toHaveBeenCalledTimes(2);
@@ -46,6 +49,73 @@ describe("eval service orchestration", () => {
       aggregateScore: 70
     }));
     expect(dependencies.markFailed).not.toHaveBeenCalled();
+    expect(dependencies.markPartial).not.toHaveBeenCalled();
+  });
+
+  it("keeps scored prompts as a partial run when the remaining work is aborted", async () => {
+    const dependencies = createDependencies();
+    const controller = new AbortController();
+    vi.mocked(dependencies.scoreAnswer)
+      .mockResolvedValueOnce(score(80, "Strong"))
+      .mockImplementationOnce(async () => {
+        controller.abort();
+        const error = new Error("stopped");
+        error.name = "AbortError";
+        throw error;
+      });
+
+    await expect(runEval({
+      profile,
+      input,
+      signal: controller.signal,
+      abortReason: () => "timeout"
+    }, dependencies)).resolves.toEqual({
+      evalRunId: "eval-run-a",
+      aggregateScore: 80,
+      status: "partial",
+      scored: 1,
+      total: 2,
+      reason: "timeout"
+    });
+
+    expect(dependencies.persistScore).toHaveBeenCalledTimes(1);
+    expect(dependencies.markPartial).toHaveBeenCalledWith(expect.objectContaining({
+      evalRunId: "eval-run-a",
+      aggregateScore: 80
+    }));
+    expect(dependencies.markFailed).not.toHaveBeenCalled();
+    expect(dependencies.markComplete).not.toHaveBeenCalled();
+  });
+
+  it("resumes from scored items instead of rerunning them", async () => {
+    const dependencies = createDependencies();
+    vi.mocked(dependencies.loadResume).mockResolvedValue({
+      evalRunId: "eval-run-a",
+      input,
+      completedIndexes: [0],
+      scores: [90]
+    });
+    vi.mocked(dependencies.scoreAnswer).mockResolvedValueOnce(score(70, "Resumed"));
+
+    await expect(runEval({
+      profile,
+      resumeEvalRunId: "eval-run-a"
+    }, dependencies)).resolves.toEqual({
+      evalRunId: "eval-run-a",
+      aggregateScore: 80,
+      status: "complete",
+      scored: 2,
+      total: 2
+    });
+
+    expect(dependencies.createRunRecords).not.toHaveBeenCalled();
+    expect(dependencies.markRunning).toHaveBeenCalledWith(expect.objectContaining({ evalRunId: "eval-run-a" }));
+    expect(dependencies.runCouncil).toHaveBeenCalledTimes(1);
+    expect(dependencies.runCouncil).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "Question B" }),
+      expect.anything()
+    );
+    expect(dependencies.persistScore).toHaveBeenCalledTimes(1);
   });
 
   it("marks an established run failed before rethrowing an orchestration error", async () => {
@@ -78,6 +148,9 @@ function createDependencies(): EvalServiceDependencies {
       "judge-a": { prompt: "0.000001", completion: "0.000002" }
     })),
     createRunRecords: vi.fn(async () => "eval-run-a"),
+    loadResume: vi.fn(async () => {
+      throw new Error("resume should not run");
+    }),
     runCouncil: vi.fn(async (councilInput) => ({
       finalAnswer: `Answer for ${councilInput.prompt}`
     })),
@@ -85,6 +158,8 @@ function createDependencies(): EvalServiceDependencies {
     persistUsage: vi.fn(async () => undefined),
     persistScore: vi.fn(async () => undefined),
     markComplete: vi.fn(async () => undefined),
+    markPartial: vi.fn(async () => undefined),
+    markRunning: vi.fn(async () => undefined),
     markFailed: vi.fn(async () => null)
   };
 }

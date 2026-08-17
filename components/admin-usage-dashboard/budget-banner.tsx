@@ -1,6 +1,6 @@
 import { AlertTriangle, WalletCards } from "lucide-react";
 import type { AdminUsageResponse } from "@/lib/admin/usage-types";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatSignedCurrency } from "@/lib/format";
 import type { BudgetStatus } from "@/lib/usage";
 
 export function BudgetBanner({ usage }: { usage: AdminUsageResponse }) {
@@ -19,7 +19,7 @@ export function BudgetBanner({ usage }: { usage: AdminUsageResponse }) {
             ? `${formatCurrency(usage.totals.estimatedCost)} estimated this month.`
             : `${formatCurrency(usage.totals.estimatedCost)} of ${formatCurrency(budget)} used${
                 percent === null ? "" : ` (${percent}%)`
-              }. Remaining: ${formatCurrency(remaining ?? 0)}.`}
+              }. Remaining: ${formatSignedCurrency(remaining ?? 0)}.`}
         </p>
       </div>
     </div>

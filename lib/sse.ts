@@ -1,6 +1,15 @@
+import type { EvalEvent } from "@/lib/evals/events";
 import type { CouncilEvent } from "@/lib/types";
 
 export function parseCouncilStreamBlock(block: string): CouncilEvent | null {
+  return parseSseJsonBlock<CouncilEvent>(block, "Council stream");
+}
+
+export function parseEvalStreamBlock(block: string): EvalEvent | null {
+  return parseSseJsonBlock<EvalEvent>(block, "Eval stream");
+}
+
+export function parseSseJsonBlock<T>(block: string, label: string): T | null {
   const lines = block.split(/\r?\n/);
   const dataLines: string[] = [];
   let eventName = "";
@@ -18,9 +27,9 @@ export function parseCouncilStreamBlock(block: string): CouncilEvent | null {
 
   const data = dataLines.join("\n");
   try {
-    return JSON.parse(data) as CouncilEvent;
+    return JSON.parse(data) as T;
   } catch {
-    throw new Error(`Council stream returned invalid data${eventName ? ` for ${eventName}` : ""}: ${preview(data)}`);
+    throw new Error(`${label} returned invalid data${eventName ? ` for ${eventName}` : ""}: ${preview(data)}`);
   }
 }
 

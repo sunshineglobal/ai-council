@@ -1,3 +1,5 @@
+import { ApiError } from "@/lib/api-error";
+import { buildEvalResumeState, type EvalResumeState } from "@/lib/evals/resume";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import type { EvalRunInput } from "@/lib/evals/types";
 
@@ -87,10 +89,56 @@ export async function markEvalRunFailed(admin: EvalAdminClient, evalRunId: strin
   return error;
 }
 
+export async function markEvalRunPartial(params: {
+  admin: EvalAdminClient;
+  evalRunId: string;
+  aggregateScore: number;
+}): Promise<void> {
+  const { error } = await params.admin
+    .from("eval_runs")
+    .update({
+      status: "partial",
+      aggregate_score: params.aggregateScore,
+      completed_at: new Date().toISOString()
+    })
+    .eq("id", params.evalRunId);
+  if (error) throw error;
+}
+
+export async function markEvalRunRunning(params: {
+  admin: EvalAdminClient;
+  evalRunId: string;
+}): Promise<void> {
+  const { error } = await params.admin
+    .from("eval_runs")
+    .update({
+      status: "running",
+      completed_at: null
+    })
+    .eq("id", params.evalRunId);
+  if (error) throw error;
+}
+
+export async function loadEvalRunForResume(params: {
+  admin: EvalAdminClient;
+  userId: string;
+  evalRunId: string;
+}): Promise<EvalResumeState> {
+  const { data, error } = await params.admin
+    .from("eval_runs")
+    .select("id,status,baseline_label,council_config,eval_sets(name,description,rubric,items),eval_scores(item_index,score)")
+    .eq("id", params.evalRunId)
+    .eq("user_id", params.userId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new ApiError(404, "Eval run not found.");
+  return buildEvalResumeState(data);
+}
+
 export async function listEvalRunsForUser(userId: string) {
   const { data, error } = await createSupabaseAdminClient()
     .from("eval_runs")
-    .select("id,status,aggregate_score,created_at,baseline_label,council_config,eval_sets(name,rubric,description),eval_scores(score,prompt,rationale,final_answer)")
+    .select("id,status,aggregate_score,created_at,baseline_label,council_config,eval_sets(name,rubric,description,items),eval_scores(item_index,score,prompt,rationale,final_answer)")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(20);

@@ -2,10 +2,12 @@
 
 import { useState } from "react";
 import type { ChangeEvent, DragEvent, FormEvent, KeyboardEvent, RefObject } from "react";
+import Link from "next/link";
 import { Loader2, Paperclip, Send, Square } from "lucide-react";
+import { AttachmentList } from "@/components/council-workspace/attachment-list";
+import type { BudgetChip } from "@/components/council-workspace/budget-chip";
 import { MAX_ATTACHMENT_COUNT, MAX_PROMPT_CHARACTERS } from "@/lib/limits";
 import type { CouncilAttachment } from "@/lib/types";
-import { AttachmentList } from "@/components/council-workspace/attachment-list";
 
 export function Composer({
   prompt,
@@ -26,7 +28,8 @@ export function Composer({
   onUploadFileList,
   onRemoveAttachment,
   onStop,
-  onSubmit
+  onSubmit,
+  budgetChip
 }: {
   prompt: string;
   promptRef: RefObject<HTMLTextAreaElement>;
@@ -47,6 +50,7 @@ export function Composer({
   onRemoveAttachment: (fileId: string) => void;
   onStop: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  budgetChip?: BudgetChip | null;
 }) {
   const [dragging, setDragging] = useState(false);
   const nearLimit = prompt.length >= Math.floor(MAX_PROMPT_CHARACTERS * 0.8);
@@ -140,6 +144,15 @@ export function Composer({
             <span className={prompt.length >= MAX_PROMPT_CHARACTERS ? "composer-limit-hit" : undefined}>
               {prompt.length.toLocaleString()}/{MAX_PROMPT_CHARACTERS.toLocaleString()}
             </span>
+          ) : null}
+          {budgetChip ? (
+            <Link
+              className={`composer-budget budget-${budgetChip.status}`}
+              href={budgetChip.href}
+              title="Open usage"
+            >
+              {budgetChip.label}
+            </Link>
           ) : null}
         </div>
         <div className="composer-actions">

@@ -2,6 +2,7 @@ import type { BudgetStatus, UsageBreakdownRow } from "@/lib/usage";
 
 export type RecentCouncilRun = {
   id: string;
+  threadId: string | null;
   prompt: string | null;
   status: string;
   createdAt: string;
@@ -15,6 +16,7 @@ export type RecentCouncilRun = {
 };
 
 export type AdminUsageResponse = {
+  subject?: { id: string; email: string };
   range: { from: string; to: string };
   budget: {
     monthlyBudgetUsd: number | null;

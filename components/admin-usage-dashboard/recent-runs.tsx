@@ -1,7 +1,9 @@
+import Link from "next/link";
+import { recentRunHref } from "@/components/admin-usage-dashboard/recent-run-href";
 import type { RecentCouncilRun } from "@/lib/admin/usage-types";
 import { formatCurrency, formatNumber } from "@/lib/format";
 
-export function RecentRuns({ runs }: { runs: RecentCouncilRun[] }) {
+export function RecentRuns({ runs, linkToChats = true }: { runs: RecentCouncilRun[]; linkToChats?: boolean }) {
   return (
     <section>
       <h3>Recent council runs</h3>
@@ -24,7 +26,7 @@ export function RecentRuns({ runs }: { runs: RecentCouncilRun[] }) {
             <tbody>
               {runs.map((run) => (
                 <tr key={run.id}>
-                  <td className="usage-name">{run.prompt ?? "Ephemeral prompt"}</td>
+                  <td className="usage-name">{runPrompt(run, linkToChats)}</td>
                   <td>{run.status}</td>
                   <td>{new Date(run.createdAt).toLocaleString()}</td>
                   <td>
@@ -40,5 +42,17 @@ export function RecentRuns({ runs }: { runs: RecentCouncilRun[] }) {
         </div>
       )}
     </section>
+  );
+}
+
+function runPrompt(run: RecentCouncilRun, linkToChats: boolean) {
+  const label = run.prompt ?? "Ephemeral prompt";
+  const href = recentRunHref(run, linkToChats);
+  if (!href) return label;
+
+  return (
+    <Link className="link-button" href={href}>
+      {label}
+    </Link>
   );
 }

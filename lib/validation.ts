@@ -40,6 +40,10 @@ export const chatTitleSchema = z.object({
 });
 
 
+export const evalResumeSchema = z.object({
+  evalRunId: z.string().uuid()
+});
+
 export const evalRunSchema = z.object({
   name: z.string().trim().min(1).max(120),
   description: z.string().trim().max(2000).optional(),
@@ -53,3 +57,14 @@ export const evalRunSchema = z.object({
   debateDepth: z.number().int().min(1).max(3).default(1),
   researchEnabled: z.boolean().default(false)
 });
+
+export function parseEvalRequest(body: unknown): { kind: "create"; input: z.infer<typeof evalRunSchema> } | { kind: "resume"; evalRunId: string } {
+  if (isRecord(body) && typeof body.evalRunId === "string" && body.items === undefined) {
+    return { kind: "resume", evalRunId: evalResumeSchema.parse(body).evalRunId };
+  }
+  return { kind: "create", input: evalRunSchema.parse(body) };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}

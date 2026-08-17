@@ -650,6 +650,12 @@ details.trace summary > span:first-child {
   color: var(--blue);
 }
 
+.eval-run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .eval-detail {
   padding: 8px 4px 12px;
 }
