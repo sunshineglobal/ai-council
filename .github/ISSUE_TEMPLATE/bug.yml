@@ -1,0 +1,43 @@
+name: Bug report
+description: Something is broken or behaves incorrectly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include API keys, service-role credentials, personal data, or exploit details.
+        Security issues go to [SECURITY.md](https://github.com/sunshineglobal/ai-council/blob/main/SECURITY.md).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you see?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps. Use placeholder values instead of real emails, keys, or prompts.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Commit SHA, tag, or "main".
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I did not include secrets, personal data, or a working exploit.
+          required: true
+        - label: I searched existing issues for a duplicate.
+          required: true

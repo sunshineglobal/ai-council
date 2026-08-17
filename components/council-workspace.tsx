@@ -73,14 +73,20 @@ export function CouncilWorkspace({
   const budgetChip = useMonthlyUsage(run.result?.id ?? null);
   const {
     attachments,
+    library,
+    storage,
     uploading,
+    libraryLoading,
     uploadError,
+    libraryError,
     uploadFiles,
     uploadFileList,
+    attachFromLibrary,
     removeAttachment,
+    deleteLibraryFile,
     clearAttachments,
     clearUploadError
-  } = useAttachments();
+  } = useAttachments(run.result?.id ?? null);
   const [modelFilter, setModelFilter] = useState("");
   const [researchEnabled, setResearchEnabled] = useState(false);
   const [saveHistory, setSaveHistory] = useState(defaultSaveHistory);
@@ -408,8 +414,12 @@ export function CouncilWorkspace({
           promptRef={promptRef}
           fileInputRef={fileInputRef}
           attachments={attachments}
+          library={library}
+          storage={storage}
           uploadError={uploadError}
+          libraryError={libraryError}
           uploading={uploading}
+          libraryLoading={libraryLoading}
           canAttachMore={canAttachMore}
           running={running}
           stopping={stopping}
@@ -420,7 +430,9 @@ export function CouncilWorkspace({
           onPromptChange={setPrompt}
           onUploadFiles={(inputEvent) => void uploadFiles(inputEvent, saveHistory)}
           onUploadFileList={(files) => void uploadFileList(files, saveHistory)}
-          onRemoveAttachment={(fileId) => void removeAttachment(fileId)}
+          onRemoveAttachment={removeAttachment}
+          onAttachFromLibrary={attachFromLibrary}
+          onDeleteLibraryFile={(fileId) => void deleteLibraryFile(fileId)}
           onStop={stop}
           onSubmit={handleSubmit}
           budgetChip={budgetChip}

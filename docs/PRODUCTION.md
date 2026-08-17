@@ -1,6 +1,6 @@
 # Production runbook
 
-This is the release checklist for AI Council. A release is not complete until the database migration, environment, health check, and authenticated smoke tests all pass.
+This is the release checklist for AI Council. A release is not complete until the database migration, environment, health check, and authenticated smoke tests all pass. The source is MIT-licensed; each deployment still needs its own secrets, allowlist, and invite list.
 
 ## Production controls
 
@@ -9,7 +9,7 @@ This is the release checklist for AI Council. A release is not complete until th
 - Model calls reserve their worst-case estimated cost against a hard monthly budget before contacting OpenRouter. Calls fail closed when current model pricing is unavailable.
 - Rate limits, per-user operation leases, budget reservations, and attachment quotas are stored in Supabase, so they work across serverless instances.
 - Browser sessions cannot write directly to application tables or the attachment bucket. Server routes perform authorization, validation, and logging.
-- Uploaded files are limited to five text-like files and 4 MB combined per request, stored privately as `text/plain`, and counted against a per-user quota. The margin below Vercel's [4.5 MB function payload limit](https://vercel.com/docs/functions/limitations#request-body-size) covers multipart overhead.
+- Uploaded files are limited to five text-like files and 4 MB combined per request, stored privately as `text/plain`, and counted against a per-user quota. Members can reuse files from the composer library and see used storage there. The margin below Vercel's [4.5 MB function payload limit](https://vercel.com/docs/functions/limitations#request-body-size) covers multipart overhead.
 - Firecrawl research is off by default and cannot be enabled in the interface until its server credential is configured.
 - Unsaved attachments expire through daily maintenance. The same job marks abandoned runs failed and prunes expired guardrail rows.
 - API routes reject cross-origin mutations, cap JSON request bodies, emit structured logs and request IDs, and return sanitized internal errors.

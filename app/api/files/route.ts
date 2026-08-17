@@ -12,7 +12,8 @@ import { requireApiProfile } from "@/lib/auth";
 import {
   acquireOperationLease,
   assertAttachmentQuota,
-  enforceRateLimit
+  enforceRateLimit,
+  loadAttachmentStorageUsage
 } from "@/lib/production-guardrails";
 import { assertRequestSize } from "@/lib/request-security";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
@@ -22,7 +23,10 @@ export const runtime = "nodejs";
 export const GET = apiRoute(async () => {
   const profile = await requireApiProfile();
   const files = await listUserAttachments(createSupabaseAdminClient(), profile.id);
-  return NextResponse.json({ files: files.map(toPublicAttachment) });
+  return NextResponse.json({
+    files: files.map(toPublicAttachment),
+    storage: await loadAttachmentStorageUsage(profile.id)
+  });
 });
 
 export const POST = apiRoute(async (request: Request) => {
@@ -56,7 +60,10 @@ export const POST = apiRoute(async (request: Request) => {
       files,
       saveHistory: formData.get("saveHistory") !== "false"
     });
-    return NextResponse.json({ files: uploaded.map(toPublicAttachment) });
+    return NextResponse.json({
+      files: uploaded.map(toPublicAttachment),
+      storage: await loadAttachmentStorageUsage(profile.id)
+    });
   } finally {
     await lease.release();
   }

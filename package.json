@@ -2,6 +2,23 @@
   "name": "ai-council",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
+  "description": "Invite-only multi-model AI council with debate, research, evals, and usage accounting.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sunshineglobal/ai-council.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sunshineglobal/ai-council/issues"
+  },
+  "homepage": "https://github.com/sunshineglobal/ai-council#readme",
+  "keywords": [
+    "ai",
+    "council",
+    "openrouter",
+    "supabase",
+    "nextjs"
+  ],
   "engines": {
     "node": ">=20.9.0"
   },

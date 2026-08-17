@@ -1,11 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { ChangeEvent, DragEvent, FormEvent, KeyboardEvent, RefObject } from "react";
 import Link from "next/link";
-import { Loader2, Paperclip, Send, Square } from "lucide-react";
+import { FolderOpen, Loader2, Paperclip, Send, Square } from "lucide-react";
+import { AttachmentLibrary } from "@/components/council-workspace/attachment-library";
 import { AttachmentList } from "@/components/council-workspace/attachment-list";
 import type { BudgetChip } from "@/components/council-workspace/budget-chip";
+import { storageChipFromUsage } from "@/components/council-workspace/storage-chip";
+import type { AttachmentStorageUsage } from "@/lib/attachments/quota";
 import { MAX_ATTACHMENT_COUNT, MAX_PROMPT_CHARACTERS } from "@/lib/limits";
 import type { CouncilAttachment } from "@/lib/types";
 
@@ -14,8 +17,12 @@ export function Composer({
   promptRef,
   fileInputRef,
   attachments,
+  library,
+  storage,
   uploadError,
+  libraryError,
   uploading,
+  libraryLoading,
   canAttachMore,
   running,
   stopping,
@@ -27,6 +34,8 @@ export function Composer({
   onUploadFiles,
   onUploadFileList,
   onRemoveAttachment,
+  onAttachFromLibrary,
+  onDeleteLibraryFile,
   onStop,
   onSubmit,
   budgetChip
@@ -35,8 +44,12 @@ export function Composer({
   promptRef: RefObject<HTMLTextAreaElement>;
   fileInputRef: RefObject<HTMLInputElement>;
   attachments: CouncilAttachment[];
+  library: CouncilAttachment[];
+  storage: AttachmentStorageUsage | null;
   uploadError: string;
+  libraryError: string;
   uploading: boolean;
+  libraryLoading: boolean;
   canAttachMore: boolean;
   running: boolean;
   stopping: boolean;
@@ -48,11 +61,16 @@ export function Composer({
   onUploadFiles: (event: ChangeEvent<HTMLInputElement>) => void;
   onUploadFileList: (files: FileList | File[]) => void;
   onRemoveAttachment: (fileId: string) => void;
+  onAttachFromLibrary: (file: CouncilAttachment) => void;
+  onDeleteLibraryFile: (fileId: string) => void;
   onStop: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   budgetChip?: BudgetChip | null;
 }) {
   const [dragging, setDragging] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const storageChip = storage ? storageChipFromUsage(storage) : null;
+  const selectedIds = useMemo(() => new Set(attachments.map((file) => file.id)), [attachments]);
   const nearLimit = prompt.length >= Math.floor(MAX_PROMPT_CHARACTERS * 0.8);
   const attachTitle = !canAttachMore
     ? (running || uploading
@@ -65,6 +83,11 @@ export function Composer({
       : "Attach files";
 
   function handlePromptKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Escape" && libraryOpen) {
+      event.preventDefault();
+      setLibraryOpen(false);
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       if (canSubmit) event.currentTarget.form?.requestSubmit();
@@ -104,11 +127,30 @@ export function Composer({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && libraryOpen) {
+          event.stopPropagation();
+          setLibraryOpen(false);
+        }
+      }}
     >
-      {attachments.length || uploadError ? (
+      {attachments.length || uploadError || libraryOpen ? (
         <div className="composer-attachments">
           {attachments.length ? (
             <AttachmentList attachments={attachments} onRemove={onRemoveAttachment} />
+          ) : null}
+          {libraryOpen ? (
+            <AttachmentLibrary
+              files={library}
+              selectedIds={selectedIds}
+              storageChip={storageChip}
+              loading={libraryLoading}
+              error={libraryError}
+              deleting={uploading}
+              canAttachMore={canAttachMore}
+              onAttach={onAttachFromLibrary}
+              onDelete={onDeleteLibraryFile}
+            />
           ) : null}
           {uploadError ? <div className="error-text small" role="alert">{uploadError}</div> : null}
         </div>
@@ -145,6 +187,16 @@ export function Composer({
               {prompt.length.toLocaleString()}/{MAX_PROMPT_CHARACTERS.toLocaleString()}
             </span>
           ) : null}
+          {storageChip ? (
+            <button
+              className={`composer-storage storage-${storageChip.status}`}
+              type="button"
+              title="Open file library"
+              onClick={() => setLibraryOpen((open) => !open)}
+            >
+              {storageChip.label}
+            </button>
+          ) : null}
           {budgetChip ? (
             <Link
               className={`composer-budget budget-${budgetChip.status}`}
@@ -156,6 +208,16 @@ export function Composer({
           ) : null}
         </div>
         <div className="composer-actions">
+          <button
+            aria-expanded={libraryOpen}
+            aria-label={libraryOpen ? "Hide file library" : "Show file library"}
+            className="icon-button ghost composer-icon-button"
+            type="button"
+            title={libraryOpen ? "Hide file library" : "File library"}
+            onClick={() => setLibraryOpen((open) => !open)}
+          >
+            <FolderOpen aria-hidden size={17} />
+          </button>
           <button
             aria-label={uploading ? "Uploading files" : "Attach files"}
             className="icon-button ghost composer-icon-button"

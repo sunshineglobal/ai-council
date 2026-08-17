@@ -11,6 +11,7 @@ export type AttachmentRow = {
   extraction_status?: string | null;
   extraction_error?: string | null;
   created_at: string;
+  saved_mode?: boolean;
 };
 
 export type ExtractionResult = {

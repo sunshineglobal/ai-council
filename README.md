@@ -1,6 +1,8 @@
 # AI Council
 
-A private, invite-only AI council app. It uses Supabase for authentication and data, OpenRouter's OpenAI-compatible API for LLM calls, and Firecrawl's standalone API for optional web research.
+An invite-only multi-model council you can self-host. The **source** is [MIT-licensed](LICENSE). A **deployment** stays private: only invited addresses can sign in.
+
+It uses Supabase for authentication and data, OpenRouter's OpenAI-compatible API for LLM calls, and Firecrawl's standalone API for optional web research.
 
 ## Features
 
@@ -8,7 +10,7 @@ A private, invite-only AI council app. It uses Supabase for authentication and d
 - Saved and ephemeral council chats.
 - Up to 8 model council members with a separate judge model.
 - Optional web research through Firecrawl's standalone search API, with at least 15 detailed sources gathered before council answers.
-- File attachments in chat: upload up to 5 private files per run, with text extraction for text-like formats such as Markdown, CSV, JSON, SQL, logs, and source files.
+- File attachments in chat: upload up to 5 private files per run, with text extraction for text-like formats such as Markdown, CSV, JSON, SQL, logs, and source files. Previously uploaded files stay in a composer library so they can be reused, and remaining storage is shown against the per-user quota.
 - Usage and cost tracking: every member can see their monthly spend and remaining budget, and admins can inspect a member's usage and set per-user budgets.
 - Evals for comparing labeled council configurations with rubric scores and per-prompt detail. Long evals stream progress, can be stopped, keep partial scores after a timeout, and can resume remaining prompts.
 
@@ -96,3 +98,15 @@ npm run test:e2e
 Read [docs/PRODUCTION.md](docs/PRODUCTION.md) before the first deployment. It covers database rollout, secrets, health checks, alerting, smoke tests, rollback, backup/restore, retention, and provider-data considerations.
 
 Security controls and disclosure guidance are documented in [SECURITY.md](SECURITY.md).
+
+## Hosted services
+
+A running instance sends prompts, attachments, and optional research queries to the providers you configure (typically OpenRouter, Supabase, and Firecrawl). This license does not grant access to those services. Use your own accounts and keys, and review their terms before accepting user data.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local development, tests, and pull request expectations. By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## License
+
+AI Council is licensed under the [MIT License](LICENSE). `package.json` stays `"private": true` so the app is not published to the npm registry.

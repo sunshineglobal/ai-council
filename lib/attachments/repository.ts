@@ -17,7 +17,7 @@ export type AttachmentDownload = {
 export async function listUserAttachments(admin: SupabaseAdmin, userId: string): Promise<CouncilAttachment[]> {
   const { data, error } = await admin
     .from("file_attachments")
-    .select("id,filename,content_type,file_size,text_preview,extraction_status,extraction_error,created_at")
+    .select("id,filename,content_type,file_size,text_preview,extraction_status,extraction_error,created_at,saved_mode")
     .eq("user_id", userId)
     .is("deleted_at", null)
     .order("created_at", { ascending: false })
@@ -112,7 +112,7 @@ export async function getUserAttachmentPreview(
 ): Promise<CouncilAttachment> {
   const { data, error } = await admin
     .from("file_attachments")
-    .select("id,filename,content_type,file_size,text_preview,extraction_status,extraction_error,created_at")
+    .select("id,filename,content_type,file_size,text_preview,extraction_status,extraction_error,created_at,saved_mode")
     .eq("id", attachmentId)
     .eq("user_id", userId)
     .is("deleted_at", null)

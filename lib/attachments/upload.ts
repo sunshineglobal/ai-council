@@ -105,7 +105,7 @@ async function uploadUserAttachment(params: {
       extraction_error: extraction.extractionError ?? null,
       saved_mode: params.saveHistory
     })
-    .select("id,filename,content_type,file_size,text_preview,extraction_status,extraction_error,created_at")
+    .select("id,filename,content_type,file_size,text_preview,extraction_status,extraction_error,created_at,saved_mode")
     .single();
 
   if (error) {

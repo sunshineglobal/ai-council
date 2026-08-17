@@ -1,11 +1,14 @@
 import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
 import {
+  attachmentStorageUsage,
   buildAttachmentContext,
   buildContentDisposition,
   extractTextFromAttachment,
   MAX_ATTACHMENT_CONTEXT_CHARS,
-  sanitizeAttachmentFilename
+  normalizeAttachment,
+  sanitizeAttachmentFilename,
+  selectLibraryAttachment
 } from "@/lib/attachments";
 import type { CouncilAttachment } from "@/lib/types";
 
@@ -67,6 +70,48 @@ describe("attachment helpers", () => {
     );
 
     expect(context.length).toBeLessThanOrEqual(MAX_ATTACHMENT_CONTEXT_CHARS);
+  });
+
+  it("treats missing saved_mode as saved and honors false", () => {
+    expect(normalizeAttachment({
+      id: "file-1",
+      filename: "notes.md",
+      content_type: "text/markdown",
+      file_size: 12,
+      created_at: new Date(0).toISOString()
+    }).savedMode).toBe(true);
+
+    expect(normalizeAttachment({
+      id: "file-2",
+      filename: "scratch.md",
+      content_type: "text/markdown",
+      file_size: 12,
+      created_at: new Date(0).toISOString(),
+      saved_mode: false
+    }).savedMode).toBe(false);
+  });
+
+  it("toggles a library file onto the run and respects the per-run limit", () => {
+    const first = attachment({ id: "a", filename: "a.md" });
+    const second = attachment({ id: "b", filename: "b.md" });
+
+    expect(selectLibraryAttachment([], first, 2).attachments).toEqual([first]);
+    expect(selectLibraryAttachment([first], first, 2).attachments).toEqual([]);
+    expect(selectLibraryAttachment([first], second, 1)).toEqual({
+      attachments: [first],
+      error: "Attach at most 1 files."
+    });
+  });
+
+  it("computes remaining attachment storage without going negative", () => {
+    expect(attachmentStorageUsage(25 * 1024 * 1024, 100 * 1024 * 1024)).toEqual({
+      usedBytes: 25 * 1024 * 1024,
+      maxBytes: 100 * 1024 * 1024,
+      remainingBytes: 75 * 1024 * 1024,
+      percentUsed: 25
+    });
+    expect(attachmentStorageUsage(120, 100).remainingBytes).toBe(0);
+    expect(attachmentStorageUsage(-8, 100).usedBytes).toBe(0);
   });
 });
 

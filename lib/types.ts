@@ -58,6 +58,7 @@ export type CouncilAttachment = {
   extractionStatus: "ready" | "unsupported" | "too_large" | "failed" | "none";
   extractionError?: string;
   createdAt: string;
+  savedMode?: boolean;
 };
 
 export type StageResult = {

@@ -29,5 +29,7 @@ export {
   sanitizeAttachmentFilename,
   toPublicAttachment
 } from "@/lib/attachments/text";
+export { attachmentStorageUsage, selectLibraryAttachment } from "@/lib/attachments/quota";
+export type { AttachmentStorageUsage } from "@/lib/attachments/quota";
 export type { AttachmentRow, ExtractionResult } from "@/lib/attachments/types";
 export { MAX_ATTACHMENT_COUNT } from "@/lib/limits";

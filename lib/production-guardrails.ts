@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { ApiError } from "@/lib/api-error";
+import { attachmentStorageUsage, type AttachmentStorageUsage } from "@/lib/attachments/quota";
 import {
   getAllowedModelIds,
   getDefaultMonthlyBudgetUsd,
@@ -149,19 +150,21 @@ export function assertResearchAvailable(enabled = true): void {
   }
 }
 
-export async function assertAttachmentQuota(userId: string, incomingBytes: number): Promise<void> {
+export async function loadAttachmentStorageUsage(userId: string): Promise<AttachmentStorageUsage> {
   const admin = createSupabaseAdminClient();
   const { data, error } = await admin.rpc("attachment_storage_usage_bytes", {
     p_user_id: userId
   });
   if (error) throw guardrailUnavailable(error);
+  return attachmentStorageUsage(Number(data) || 0, getMaxUserAttachmentStorageBytes());
+}
 
-  const usedBytes = Number(data) || 0;
-  const maxBytes = getMaxUserAttachmentStorageBytes();
-  if (incomingBytes < 0 || usedBytes + incomingBytes > maxBytes) {
+export async function assertAttachmentQuota(userId: string, incomingBytes: number): Promise<void> {
+  const storage = await loadAttachmentStorageUsage(userId);
+  if (incomingBytes < 0 || storage.usedBytes + incomingBytes > storage.maxBytes) {
     throw new ApiError(
       413,
-      `Attachment storage quota exceeded (${formatMegabytes(usedBytes)} of ${formatMegabytes(maxBytes)} used).`
+      `Attachment storage quota exceeded (${formatMegabytes(storage.usedBytes)} of ${formatMegabytes(storage.maxBytes)} used).`
     );
   }
 }

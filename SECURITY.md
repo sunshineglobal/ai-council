@@ -6,7 +6,11 @@ The current default branch is supported. Upgrade older deployments before reques
 
 ## Reporting a vulnerability
 
-Do not open a public issue containing credentials, personal data, exploit details, or a working proof of concept. Contact the repository owner through a private channel and include the affected release, impact, reproduction steps, and any request IDs. Rotate any credential that may have been disclosed before sending the report.
+Do not open a public issue containing credentials, personal data, exploit details, or a working proof of concept.
+
+Report privately through [GitHub Security Advisories](https://github.com/sunshineglobal/ai-council/security/advisories/new). Include the affected release or commit, impact, reproduction steps, and any request IDs. Rotate any credential that may have been disclosed before sending the report.
+
+We will acknowledge the report, confirm the issue, and coordinate a fix before any public disclosure.
 
 ## Security model
 

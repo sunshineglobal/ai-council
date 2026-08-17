@@ -500,29 +500,39 @@
 
 .composer-meta span + span,
 .composer-meta span + .composer-budget,
-.composer-meta .composer-budget {
+.composer-meta span + .composer-storage,
+.composer-meta .composer-budget,
+.composer-meta .composer-storage {
   padding-left: 8px;
   border-left: 1px solid var(--line);
 }
 
-.composer-budget {
+.composer-budget,
+.composer-storage {
   max-width: 160px;
   overflow: hidden;
+  border: 0;
+  background: transparent;
+  padding: 0;
   color: inherit;
   font: inherit;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.composer-budget:hover {
+.composer-budget:hover,
+.composer-storage:hover {
   color: var(--ink);
 }
 
-.composer-budget.budget-warning {
+.composer-budget.budget-warning,
+.composer-storage.storage-warning {
   color: var(--amber);
 }
 
-.composer-budget.budget-over {
+.composer-budget.budget-over,
+.composer-storage.storage-over {
   color: var(--red);
 }
 
@@ -576,6 +586,93 @@
 
 .composer-attachments .attachment-list {
   margin-top: 0;
+}
+
+.attachment-library {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 8px;
+}
+
+.attachment-library-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.attachment-library-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.attachment-library-quota {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.attachment-library-quota.storage-warning {
+  color: var(--amber);
+}
+
+.attachment-library-quota.storage-over {
+  color: var(--red);
+}
+
+.attachment-library-list {
+  max-height: 180px;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.attachment-library-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.attachment-library-pick {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: inherit;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.attachment-library-pick:hover:not(:disabled) {
+  border-color: rgba(52, 104, 199, 0.35);
+}
+
+.attachment-library-pick:disabled {
+  cursor: default;
+  opacity: 0.92;
+}
+
+.attachment-library-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .message-row-user .attachment-list {

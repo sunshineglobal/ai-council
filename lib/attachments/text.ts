@@ -124,7 +124,8 @@ export function normalizeAttachment(row: AttachmentRow): CouncilAttachment {
     extractedText: row.extracted_text ?? undefined,
     extractionStatus: normalizeExtractionStatus(row.extraction_status),
     extractionError: row.extraction_error ?? undefined,
-    createdAt: row.created_at
+    createdAt: row.created_at,
+    savedMode: row.saved_mode !== false
   };
 }
 

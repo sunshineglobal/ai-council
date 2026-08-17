@@ -135,7 +135,7 @@ export function AttachmentList({
                   aria-label={`Remove ${attachment.filename}`}
                   className="icon-button ghost attachment-remove"
                   type="button"
-                  title={`Remove ${attachment.filename}`}
+                  title={`Remove ${attachment.filename} from this run`}
                   onClick={() => onRemove(attachment.id)}
                 >
                   <X aria-hidden size={14} />
