@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Do not include API keys, service-role credentials, personal data, or exploit details.
-        Security issues go to [SECURITY.md](https://github.com/sunshineglobal/ai-council/blob/main/SECURITY.md).
+        Security issues go to [SECURITY.md](https://github.com/adityasingla5/ai-council/blob/main/SECURITY.md).
   - type: textarea
     id: what-happened
     attributes:

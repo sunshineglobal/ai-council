@@ -4,7 +4,7 @@ Thanks for helping with AI Council. By participating you agree to the [Code of C
 
 ## What belongs in this repository
 
-This is an invite-only self-hosted app. Keep changes scoped, tested, and free of secrets.
+This is a public MIT-licensed repository for an invite-only self-hosted app. Keep changes scoped, tested, and free of secrets.
 
 Do not commit:
 

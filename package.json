@@ -3,15 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
+  "author": "Aditya Singla",
   "description": "Invite-only multi-model AI council with debate, research, evals, and usage accounting.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sunshineglobal/ai-council.git"
+    "url": "git+https://github.com/adityasingla5/ai-council.git"
   },
   "bugs": {
-    "url": "https://github.com/sunshineglobal/ai-council/issues"
+    "url": "https://github.com/adityasingla5/ai-council/issues"
   },
-  "homepage": "https://github.com/sunshineglobal/ai-council#readme",
+  "homepage": "https://github.com/adityasingla5/ai-council#readme",
   "keywords": [
     "ai",
     "council",

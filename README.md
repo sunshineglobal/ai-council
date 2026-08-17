@@ -1,6 +1,6 @@
 # AI Council
 
-An invite-only multi-model council you can self-host. The **source** is [MIT-licensed](LICENSE). A **deployment** stays private: only invited addresses can sign in.
+An invite-only multi-model council you can self-host. The **source** is public and [MIT-licensed](LICENSE) at [adityasingla5/ai-council](https://github.com/adityasingla5/ai-council). A **deployment** stays private: only invited addresses can sign in.
 
 It uses Supabase for authentication and data, OpenRouter's OpenAI-compatible API for LLM calls, and Firecrawl's standalone API for optional web research.
 
@@ -109,4 +109,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for local development, tests, and pull re
 
 ## License
 
-AI Council is licensed under the [MIT License](LICENSE). `package.json` stays `"private": true` so the app is not published to the npm registry.
+AI Council is licensed under the [MIT License](LICENSE). Copyright (c) 2026 Aditya Singla. `package.json` stays `"private": true` so the app is not published to the npm registry.
